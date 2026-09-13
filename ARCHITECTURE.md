@@ -913,27 +913,32 @@ somewhere specific, and a test fixture with four logins that already exist.
 
 Written down so they are choices rather than surprises.
 
-- **The agent's output quality is unmeasured.** Every layer around it is tested;
-  whether it writes a good scene is not, and cannot be by a unit test.
+- **The agent's output quality is unmeasured**, tools included. Every layer
+  around it is tested; whether it writes a good scene, or lays a fight out
+  sensibly, is not something a unit test can answer.
 - **No guided level-up.** Levels can be set; nothing prompts for the HP roll or
   the ASI.
-- **A player cannot move their own token directly.** They ask, in words, and
-  confirm what comes back. The host refuses a player's `MOVE` outright, because
-  "your own token, but only on your turn, and only that far" is a rule that
-  needs the care the edit path took to get right.
+- **A player's own wheel is the short way round, not a replacement.** They can
+  move and swing for their own character on their own turn; anything else —
+  Dash, Ready, talking to the innkeeper — is still words, formalised and
+  confirmed. Both paths exist, and the second is the one that can express
+  everything.
 - **Obstacles are the only terrain.** A square is empty or blocked; there is no
   difficult ground, no elevation, and no line of sight. What cover *does* is a
   ruling the DM makes — the app's job is to agree with everyone about where the
   pillar is.
 - **Attacks are the simple case only.** A weapon on the sheet, a d20, and
-  reach. No spells, no advantage, no opportunity attacks, no sneak attack, and
-  everyone is assumed proficient with what they are carrying.
-- **One action, and no bonus actions or reactions.** A turn here is a move and
-  one attack. Dash, Dodge, Disengage, Hide, Help and Ready do not exist, and
-  neither does Extra Attack — a fighter at level five still gets one swing.
-- **Movement is not split around the action** in the interface, though the
-  budget would allow it: a proposal carries one move and one attack, in that
-  order.
+  reach. No spells, no advantage, no sneak attack, and everyone is assumed
+  proficient with what they are carrying. Opportunity attacks *are* here, and
+  are the one thing the app rules on unasked.
+- **One action, and no bonus actions.** A turn here is a move and one attack.
+  Dash, Dodge, Disengage, Hide, Help and Ready do not exist, and neither does
+  Extra Attack — a fighter at level five still gets one swing. The only
+  reaction that exists is the opportunity attack, one a round.
+- **A proposal still carries one move and one attack, in that order**, even
+  though the budget allows splitting movement around the action and the map now
+  permits it: the wheel can be opened again after a swing. The formalised path
+  autopilot writes has not caught up with the one a hand takes.
 - **Inventory is free text, and only the DM's side fills it.** `GIVE` appends a
   line to `entity.data.inventory`, which is what a person writes their own way
   — "3 torches", "the bent iron key". Autopilot calls it when somebody picks
@@ -943,8 +948,6 @@ Written down so they are choices rather than surprises.
   a goblin is not a level-one nobody with a class; `overrides.ac` and
   `overrides.hp_max` are doing the load-bearing part, and its traits are prose
   in a notes field.
-- **The agent's output quality is still unmeasured**, tools included. Whether
-  it lays a fight out sensibly is not something a unit test can answer.
 - **The homebrew merge layer has no editing UI.** `Content` merges it; nothing
   writes to it.
 - **MCP sends campaign context to whatever model the client runs.** Fine for a

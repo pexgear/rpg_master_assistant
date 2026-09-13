@@ -2,7 +2,8 @@
 
 Instructions for an AI agent changing this code. Short on purpose — the
 explanation lives in [ARCHITECTURE.md](ARCHITECTURE.md), which you should read
-before your first change.
+before your first change, and what is true *right now* lives in
+[PLAN.md](PLAN.md), which you should read before deciding what to do.
 
 ---
 
@@ -24,8 +25,12 @@ edit and is not.
    a new command, a new install step, different behaviour. A README describing
    the previous release is worse than no README, because it is trusted.
 4. **`ARCHITECTURE.md`** — if the release changed the *shape*: a package, a
-   migration, a message type, a version constant, an invariant, a flow.
-5. Only then commit, tag `vX.Y.Z`, and push the tag.
+   migration, a message type, a version constant, an invariant, a flow. Check
+   **Known gaps** in particular: a release usually closes one, and a limitation
+   still listed after it is fixed is read as true by the next person.
+5. **`PLAN.md`** — where the project now stands and what is next. A release
+   moves both.
+6. Only then commit, tag `vX.Y.Z`, and push the tag.
 
 The suite checks what it can — that every package, migration, panel and version
 constant in `ARCHITECTURE.md` matches reality, and that the current version has

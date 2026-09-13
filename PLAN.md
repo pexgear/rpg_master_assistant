@@ -1,254 +1,142 @@
-# Canon Keeper — build plan & cost model
+# Where Canon Keeper stands, and what is next
 
-A push-to-talk AI assistant for running D&D 5e, built around one rule: **what the DM
-actually says is the only source of truth.**
+The state of the project in one file, so that picking it up on a different
+machine — or after a month away — does not start with reading the git log.
 
-- Input: push-to-talk voice (DM only)
-- Cadence: weekly, 3–4 hour sessions
-- Runs: locally, on your machine
-- API cost: ~$3–8 per session, $15–35 per month
+[ARCHITECTURE.md](ARCHITECTURE.md) says how it is built and why.
+[CHANGELOG.md](CHANGELOG.md) says what changed and when. This one says what is
+true *now* and what is worth doing next, which neither of those can: a
+changelog only knows about things that shipped, and an architecture document
+deliberately outlives any release.
 
-The storytelling is the easy part — any current model improvises a decent tavern brawl.
-The hard part is bookkeeping: keeping straight what the machine *suggested* versus what
-you actually *said*, session after session, and never letting the first quietly become
-the second.
-
----
-
-## 1. The one decision everything hangs on
-
-Write this into the data model on day one. Retrofitting it later means throwing the
-database away.
-
-| | Canon — what is true | Proposal — what was offered |
-|---|---|---|
-| Example | "Sildar doesn't make it. He bleeds out while Elara is still tying the tourniquet." | "Sildar survives but loses the use of his sword arm…" |
-| Written from | Your transcribed voice, only | The model, only |
-| Table | `fact` | `proposal` |
-| States | confirmed; superseded (never deleted) | `open` / `taken` / `discarded` — never `true` |
-
-**The invariant:** a proposal row can never be the source of a fact row. Every fact
-carries a `source_utterance` pointing at something you said. If a fact has no utterance
-behind it, it came from the prepared module — and even that yields the moment your voice
-contradicts it.
+**Keep it current.** A stale plan is worse than no plan, because it is
+believed. This file was the original build plan for a push-to-talk
+transcription tool and sat untouched for months while something else got
+built — which is exactly the failure it now exists to prevent.
 
 ---
 
-## 2. The loop, five stages
+## What it is
 
-Each stage has a different cost and latency profile, so keep them as separate calls
-rather than one giant prompt.
+A dockable desktop assistant for running D&D 5e, built around one rule: **what
+the DM actually says is the only source of truth.** Everything else is derived,
+proposed, or projected from it.
 
-1. **Capture** — global hotkey held down, mic recorded to a WAV. 10–30 seconds of you
-   narrating the beat.
-2. **Transcribe** — local Whisper, primed with your campaign's proper nouns. Sub-second
-   on a GPU.
-3. **Extract** — cheap model turns the transcript into structured facts. Lands in a
-   confirm tray, *not* the database.
-4. **Reconcile** — new facts commit; contradicted ones get superseded. Open proposals
-   get closed as taken or discarded.
-5. **Propose** — stronger model reads canon + the module and offers three branches.
-   Fires speculatively so it's on screen before you need it.
-
-Stages 1–4 run on every push-to-talk. Stage 5 is the expensive one — throttle it to
-roughly every other beat, or bind it to a second hotkey.
+Python and PySide6, one SQLite file per campaign, runs on Windows, macOS and
+Linux. Optional agent features need an Anthropic key; the app itself runs with
+no key and no internet.
 
 ---
 
-## 3. What to use
+## Where it stands
 
-Everything runs locally except the two API calls. One language, no hosting bill, no
-account to keep alive.
+**0.6.1 is released** and published, with CI green across Windows, macOS and
+Linux × Python 3.11 and 3.12.
 
-| Layer | Pick | Why this one |
-|---|---|---|
-| Shell | Python + local web UI | FastAPI serving one HTML page on localhost, WebSocket for live updates. Package as Tauri later if you want a real app icon. |
-| Hotkey | `pynput` | Works when the window isn't focused — essential, since you'll be looking at your players, not the screen. Browsers can't do global hotkeys. |
-| Capture | `sounddevice` | Push-to-talk means you only ever record your own voice. No diarization problem, no consent problem with your players. |
-| Transcription | `faster-whisper` | **Free.** `distil-large-v3` on your GPU handles 20-second clips in well under a second. Deepgram Nova-3 at $0.0048/min is the fallback if your machine struggles. |
-| Extraction | Claude Haiku 4.5 | $1/$5 per M tokens. Runs 80+ times a session; this is where a cheap model earns its keep. It's only doing transcript → JSON. |
-| Branching | Claude Sonnet 5 | $2/$10 per M. Needs to hold the module, your canon, and the last few minutes at once. Opus 5 if you want richer prose. |
-| Storage | SQLite | One file you can back up, diff, and open in a GUI when extraction gets something wrong at 11pm. |
-| Retrieval | Structured, **not** vector | An adventure is a graph of scenes, NPCs and locations — not a blob of prose. Index by entity ID and pull by current location. Add embeddings only if that stops working. |
+Working and used at a table: the plugin shell with docking and named layouts;
+Characters and Cities; one-shot templates; LAN sessions with per-character
+invites, shared chat and host-rolled dice; local speech-to-text; and combat —
+an initiative order and a shared grid, with turns taken on the map.
 
-The retrieval row is the one most people get wrong. Chunking a module into a vector store
-loses exactly the structure — "this room connects to that one", "this NPC knows that
-secret" — that makes suggestions coherent.
+**Nobody has played 0.6.1.** It is the largest change to combat the project has
+had, and every bit of it is verified by tests and none of it by a person
+running a fight. That is the single most important thing to know before
+starting anything new.
+
+What 0.6.1 changed, in the order it would bite:
+
+- Dragging a token from square to square is **gone**, for the DM as much as for
+  anybody. Creatures are placed onto the map and taken off it; in between they
+  move by taking a turn.
+- Turns are taken on the map: whoever is up is selected, Space opens a wheel of
+  what they can do, and players get the same wheel for their own character on
+  their own turn.
+- Moves are routed round what is in the way, charged along the route, and
+  swung at by anybody whose reach they leave.
+- A death save is asked for in the chat and cannot be dodged.
 
 ---
 
-## 4. The canon store
+## What to do next
 
-Four tables. The supersession column is what lets you change your mind mid-campaign
-without corrupting the record.
+Roughly in the order that would most improve an evening at the table.
 
-```sql
--- everything you actually said, verbatim
-CREATE TABLE utterance (
-  id INTEGER PRIMARY KEY, session_id INTEGER,
-  t REAL, text TEXT, audio_path TEXT
-);
+**1. Play a fight, and fix what that finds.** Before anything below. The
+combat rewrite is unexercised by a human, and the bugs it has are the kind
+only playing finds — a turn that feels wrong, a wheel that opens on the wrong
+creature, a walk that looks stupid.
 
--- what the model offered. never a source of truth.
-CREATE TABLE proposal (
-  id INTEGER PRIMARY KEY, created_at REAL,
-  label TEXT, body TEXT,
-  status TEXT CHECK(status IN ('open','taken','discarded'))
-);
+**2. The turn is still one move and one attack.** The budget allows splitting
+movement around the action and the map now permits it, but the *proposal* path
+— what autopilot formalises and a player accepts — still carries one move and
+one attack in that order. Dash, Dodge, Disengage, Hide, Help and Ready do not
+exist, and neither does Extra Attack.
 
--- the truth. one row per assertion.
-CREATE TABLE fact (
-  id INTEGER PRIMARY KEY,
-  subject TEXT,            -- npc:sildar, loc:cragmaw_hideout
-  predicate TEXT,          -- status, location, owes_favour_to
-  object TEXT,
-  source_utterance INTEGER REFERENCES utterance(id),
-  confirmed INTEGER DEFAULT 0,   -- you pressed accept
-  asserted_at REAL,
-  superseded_by INTEGER REFERENCES fact(id)
-);
+**3. Spells are absent.** Attacks are a weapon, a d20 and reach. This is the
+largest single hole between the app and the game, and the one most likely to
+decide whether it is usable for a real campaign past level three.
 
--- prepared module content, same shape, source_utterance NULL
-CREATE TABLE scene (
-  id TEXT PRIMARY KEY, title TEXT, body TEXT,
-  connects_to TEXT, entities TEXT   -- JSON arrays of ids
-);
+**4. Nothing measures whether the agent plays well.** Every layer around it is
+tested; whether it writes a good scene, or lays a fight out sensibly, is not
+something a unit test can answer, and no other check exists.
+
+**5. The stand-in has no judgement.** It works the turn out from the map and
+costs nothing to run, which is the right default. It does not understand cover,
+or that the wizard is the thing to reach.
+
+The rest of the known limits are listed in
+[ARCHITECTURE.md § Known gaps](ARCHITECTURE.md#known-gaps); that list is the
+complete one and this is only the part worth acting on.
+
+---
+
+## Working on it from more than one machine
+
+Everything the code needs is in git. Two things are not.
+
+**Your campaigns are not in the repository.** They live in the per-OS data
+directory, which on Windows is:
+
+```
+%APPDATA%\CanonKeeper\CanonKeeper\
+  campaigns\*.sqlite3    one file per campaign
+  profile.sqlite3        theme, dock layout, saved logins
+  servers.json
 ```
 
-Current state is `SELECT * FROM fact WHERE superseded_by IS NULL`. That view — scoped to
-the entities in play right now — is what you send to the model, never the whole log.
+They are small — a campaign in use is a couple of hundred kilobytes. Copy that
+folder to the same place on the other machine and it arrives with everything,
+the dock layout included. Copy the `.sqlite3` files while the app is closed, or
+take them with SQLite's own backup; a plain copy of a live database can catch
+it mid-write.
+
+**The virtualenv does not travel.** It is gitignored, it is most of the
+project's size on disk, and its launchers have the absolute path baked into
+them. Run the installer on the new machine instead:
+
+```
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+One trap worth knowing: if the installer picks the **Microsoft Store** build of
+Python, the app runs correctly but Windows files it under Python in the taskbar
+and shows Python's icon, because a packaged process cannot claim an identity of
+its own. A virtualenv built from that interpreter inherits it. Use a python.org
+install. The app says so in its log when it happens.
 
 ---
 
-## 5. What it costs
+## The documents, and which one to change
 
-Anthropic and Deepgram list prices as of August 2026, with 1-hour prompt caching applied
-— that caching is roughly a third of the bill on its own.
-
-### Assumptions (your cadence)
-
-| Parameter | Value |
+| | |
 |---|---|
-| Spoken beats per session | 80 |
-| Session length | 3.5 h |
-| Sessions per month | 4.3 |
-| Beats that trigger a suggestion | 50% (40 calls) |
-| Avg push-to-talk clip | 20 s |
-| Extraction call | 800 fresh + 2,400 cached in, 300 out |
-| Suggestion call | 8,000 fresh + 10,000 cached in, 700 out |
+| [README.md](README.md) | for someone running a game |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | for someone changing the code: the shape, and why |
+| [AGENTS.md](AGENTS.md) | the rules an agent works under here |
+| [RELEASING.md](RELEASING.md) | how a version is cut |
+| [CHANGELOG.md](CHANGELOG.md) | what changed, per release |
+| this file | what is true now, and what is next |
 
-### Per session
-
-| Component | Model | Cost |
-|---|---|---|
-| Extraction (80 calls) | Haiku 4.5 | $0.22 |
-| Suggestions (40 calls) | Sonnet 5 | $1.16 |
-| Transcription | local Whisper | free |
-| **Total** | | **$1.51** |
-
-At ~4.3 sessions/month that is **$6.50/month, $78/year**.
-
-### Swapping the suggestion model
-
-| Suggestion model | Per session | Per month |
-|---|---|---|
-| Haiku 4.5 | $0.80 | $3.40 |
-| Sonnet 5 | $1.51 | $6.50 |
-| Opus 5 | $3.25 | $14.00 |
-
-### The honest number
-
-Those are the mechanical figures. Budget **2× the headline** for real play — retries when
-extraction mangles a name, rules lookups, NPC dialogue on demand, the end-of-session
-recap. That lands you at roughly **$3–8 a session, $15–35 a month**.
-
-### One-time and zero costs
-
-| Item | Cost | Note |
-|---|---|---|
-| Ingesting a 250-page module | < $2 | One time per adventure. Use the Batch API for 50% off. |
-| Hosting | $0 | It runs on your machine. There's no reason for this to be a web service. |
-| Embeddings | $0 | Structured retrieval needs none. If you add them later, `sentence-transformers` runs locally. |
-| Whisper model | $0 | ~1.5 GB download, one time. |
-| Your time | 3–4 weekends | The real cost. |
-
-### Reference prices used
-
-| Item | Input | Output | Cache read | 1h cache write |
-|---|---|---|---|---|
-| Claude Haiku 4.5 | $1 /M | $5 /M | $0.10 /M | $2 /M |
-| Claude Sonnet 5 | $2 /M | $10 /M | $0.20 /M | $4 /M |
-| Claude Opus 5 | $5 /M | $25 /M | $0.50 /M | $10 /M |
-| Deepgram Nova-3 streaming | $0.0048 / min | | | |
-
----
-
-## 6. What will bite you
-
-Five failure modes, in the order you'll hit them.
-
-**1. Fantasy names get mangled.** Whisper renders "Cragmaw" as "crag more", and now your
-canon has a new location in it.
-→ *Fix:* maintain a glossary of proper nouns and pass it to Whisper as `initial_prompt`.
-It's one string and it transforms accuracy on invented words. Regenerate it from the
-entity table after every session.
-
-**2. Silent bad writes.** Extraction misreads intent, commits a fact, and three sessions
-later the model insists a dead NPC is alive.
-→ *Fix:* nothing writes to `fact` unconfirmed. Extracted facts land in a tray; one
-keypress accepts all, one rejects. Low-confidence ones stay greyed until you look.
-
-**3. Latency at the table.** Eight seconds of dead air while four people watch you stare
-at a laptop kills the scene.
-→ *Fix:* generate speculatively — fire stage 5 the instant canon commits, before you ask.
-Stream the tokens, and keep the previous suggestions on screen while new ones build.
-
-**4. Canon outgrows the context.** By session twenty the fact log is enormous and you're
-paying to resend your whole campaign every call.
-→ *Fix:* never send the log. Send a rolling per-session summary plus facts scoped to the
-entities currently in play. Cache the stable half for an hour at a time.
-
-**5. It out-talks you.** Ten lush paragraphs of options every beat, and you stop
-improvising because reading is easier.
-→ *Fix:* hard-cap it. Three branches, one sentence each, each citing the fact IDs it drew
-on so ungrounded invention is visible. A hotkey that hides the panel entirely.
-
----
-
-## 7. Build order
-
-The sequencing matters more than it looks. Prove the physical loop is comfortable at a
-real table before any model is involved — if holding a key and narrating a beat feels
-awkward, no amount of AI quality saves it.
-
-**Weekend 1 — capture only, no AI.**
-Hotkey, recording, local Whisper, transcript scrolling on screen, rows in SQLite. Run one
-real session with it. You'll learn more here than from any of the later steps.
-
-**Weekend 2 — extraction and the confirm tray.**
-Haiku turns transcripts into facts; you accept or reject them. Add the canon panel,
-editable by hand. Still no suggestions.
-
-**Weekend 3 — the module and the branches.**
-Ingest the adventure into the scene table, wire entity-scoped retrieval, and turn on the
-three-branch panel with speculative generation.
-
-**Weekend 4 — the table comforts.**
-Session recap generation, NPC voice on demand, initiative and HP tracking, and a "what did
-the party learn about X" query box.
-
----
-
-## Notes
-
-**On the adventure text:** the 5e SRD is released under CC BY 4.0, so rules content is
-fair game. A published module is copyrighted — loading your own copy into a tool you run
-privately is ordinary personal use, but the ingested scene table isn't something to ship
-with the app if you ever share it.
-
-**On pricing:** checked August 2026 against Anthropic and Deepgram list rates. Token
-estimates are per-call averages; your real numbers will shift once you see how verbose
-your own prompts get.
-
-Sources: <https://platform.claude.com/docs/en/about-claude/pricing> ·
-<https://deepgram.com/pricing>
+The suite checks what it can — every package, migration, panel and version
+constant named in the architecture document has to exist. It cannot check
+whether the prose is still true, and prose is where these drift.
