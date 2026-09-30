@@ -12,6 +12,7 @@ and an edit that comes back as "sent to your DM" rather than "done".
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import replace
 
 import pytest
@@ -19,6 +20,7 @@ import pytest
 from canon_keeper.net.server import SessionServer
 from canon_keeper.repo.entities import KIND_NPC, KIND_PC, Entity
 from canon_keeper_client import AgentSession
+from canon_keeper_protocol import enrol
 from canon_keeper_mcp.server import CanonKeeperTools, build_server
 
 
@@ -501,3 +503,144 @@ def test_a_seat_can_make_its_own_death_save(qapp, hosted, repos):
     assert "Rolled" in said
     after = repos.encounters.combatant(tokens["hero"].id)
     assert (after.death_successes + after.death_failures) >= 1, "nothing was rolled"
+
+
+# --------------------------------------------------- getting in for the first time
+#
+# A seat had two ways in: a username and password that already existed, and a
+# seat token the DM minted. Neither is what a new player has. What they have is
+# an invite -- so an agent playing a seat had to borrow an account made somewhere
+# else first, which is a strange first step for the client that is supposed to be
+# the whole client.
+
+
+def test_a_seat_can_join_on_an_invite_and_choose_its_own_password(qapp, hosted, repos):
+    """The account does not exist until this runs, and then it does.
+
+    Enrolment and login stay two round trips, exactly as in the app: this makes
+    the account and stops, and the same client turns round and logs in with what
+    it just chose. A host that admitted somebody straight off an enrolment would
+    have two doors into a session and the second is the one nobody looks at
+    again.
+    """
+    server, campaign, _elara, _villain = hosted
+    newcomer = repos.entities.create(
+        Entity(id=None, campaign_id=campaign.id, kind=KIND_PC, name="Sable")
+    )
+    code = server.invite_for(newcomer.id)
+    assert code, "the host would not mint an invite"
+    assert repos.accounts.by_username(campaign.id, "sable") is None
+
+    async def go():
+        session = AgentSession(
+            f"ws://127.0.0.1:{server.port}",
+            "sable",
+            "a-password-of-my-own",
+            _ignore,
+            invite=code,
+        )
+
+        async def pump():
+            try:
+                await session.run()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+
+        asyncio.create_task(pump())
+        async with asyncio.timeout(15):
+            while session.table.me is None:
+                await asyncio.sleep(0.02)
+        await asyncio.sleep(0.4)
+        return session
+
+    session = _spin(qapp, go())
+    assert session.table.me is not None, "never got in"
+    account = repos.accounts.by_username(campaign.id, "sable")
+    assert account is not None, "the account was not made"
+    assert session._invite == "", "the code was kept after it was used"
+
+
+def test_the_same_password_works_on_the_next_run(qapp, hosted, repos):
+    """Which is the point of choosing it. The invite is used once.
+
+    An agent that needed the code every time would need a DM to mint one every
+    time, and the code is the thing worth stealing.
+    """
+    server, campaign, _elara, _villain = hosted
+    newcomer = repos.entities.create(
+        Entity(id=None, campaign_id=campaign.id, kind=KIND_PC, name="Sable")
+    )
+    code = server.invite_for(newcomer.id)
+
+    async def join(invite):
+        session = AgentSession(
+            f"ws://127.0.0.1:{server.port}", "sable", "a-password-of-my-own",
+            _ignore, invite=invite,
+        )
+
+        async def pump():
+            try:
+                await session.run()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+
+        asyncio.create_task(pump())
+        async with asyncio.timeout(15):
+            while session.table.me is None:
+                await asyncio.sleep(0.02)
+        await asyncio.sleep(0.3)
+        return session
+
+    async def go():
+        first = await join(code)
+        await first.close() if hasattr(first, "close") else None
+        await asyncio.sleep(0.3)
+        # No code this time.
+        second = await join("")
+        return first, second
+
+    first, second = _spin(qapp, go())
+    assert first.table.me is not None
+    assert second.table.me is not None, "the password it chose did not work again"
+
+
+def test_a_wrong_invite_is_refused_and_makes_nothing(qapp, hosted, repos):
+    """A guess costs a scrypt and leaves no account behind."""
+    server, campaign, _elara, _villain = hosted
+    repos.entities.create(
+        Entity(id=None, campaign_id=campaign.id, kind=KIND_PC, name="Sable")
+    )
+
+    async def go():
+        session = AgentSession(
+            f"ws://127.0.0.1:{server.port}", "sable", "whatever",
+            _ignore, invite="ZZZZZ-ZZZZZ",
+        )
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(session.run(), 10)
+        return session
+
+    _spin(qapp, go())
+    assert repos.accounts.by_username(campaign.id, "sable") is None, (
+        "a refused invite still made an account"
+    )
+
+
+def test_a_whole_invite_carries_its_own_code(qapp, hosted, repos):
+    """A DM sends one string. The code is in the fragment, which never goes to
+    a server -- so the thing you paste is safe to be the thing you paste.
+    """
+    server, campaign, _elara, _villain = hosted
+    newcomer = repos.entities.create(
+        Entity(id=None, campaign_id=campaign.id, kind=KIND_PC, name="Sable")
+    )
+    code = server.invite_for(newcomer.id)
+    whole = enrol.wrap(f"ws://127.0.0.1:{server.port}", code)
+
+    address, carried = enrol.unwrap(whole)
+    assert address == f"ws://127.0.0.1:{server.port}"
+    assert enrol.clean_code(carried) == enrol.clean_code(code)

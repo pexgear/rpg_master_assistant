@@ -709,6 +709,20 @@ pip install "canon-keeper[mcp]"
 canonkeeper-mcp --url wss://your-host.tailXXXX.ts.net --user marco
 ```
 
+**The first time, pass the invite your DM sent** and pick your own password.
+The whole invite works as the url, because that is the shape a DM sends it in —
+the code lives in the fragment, which is the part of a URL never sent to a
+server:
+
+```bash
+canonkeeper-mcp --url "wss://your-host.tailXXXX.ts.net#ABCDE-FGHIJ" --user marco
+```
+
+After that leave the invite off: the account exists, and logging in is the
+ordinary way in. The code is used once and thrown away — enrolment makes the
+account and stops, and the client turns round and logs in with what it chose, so
+there is one door into a session rather than two.
+
 It holds one login and has exactly that login's authority. `roll` is rolled on
 the host. `update_my_character` is a **request** — it returns "sent to your DM",
 because that is what happened. There is no privileged path, which is why a bug

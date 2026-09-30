@@ -27,6 +27,7 @@ import sys
 import threading
 
 from canon_keeper_client import AgentSession, LoginFailed
+from canon_keeper_protocol import enrol
 from canon_keeper_mcp import __version__
 from canon_keeper_mcp.server import build_server
 
@@ -40,6 +41,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--url", required=True, help="ws:// or wss:// session address")
     parser.add_argument("--user", required=True, help="your login")
+    parser.add_argument(
+        "--invite",
+        default="",
+        help=(
+            "an invite code, the first time only: makes the login your DM "
+            "invited, with the username and password given here. Afterwards "
+            "leave it off -- the account exists and logging in is the ordinary "
+            "way in."
+        ),
+    )
     parser.add_argument("--version", action="version", version=__version__)
     return parser
 
@@ -65,7 +76,19 @@ def main(argv: list[str] | None = None) -> int:
         being pushed at.
         """
 
-    session = AgentSession(args.url, args.user, password, on_said)
+    # A whole invite -- "wss://host#ABCDE-FGHIJ" -- can be pasted as the url and
+    # carries its own code, because that is the shape a DM sends. The code lives
+    # in the fragment, which is the part of a URL never sent to a server, which
+    # is exactly what it needs to be.
+    url, invite = args.url, args.invite
+    if "#" in url and not invite:
+        try:
+            url, invite = enrol.unwrap(url)
+        except enrol.EnrolError as exc:
+            print(f"That invite could not be read: {exc}", file=sys.stderr)
+            return 1
+
+    session = AgentSession(url, args.user, password, on_said, invite=invite)
     ready = threading.Event()
     failure: list[BaseException] = []
 
@@ -101,10 +124,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{kind}: {exc}", file=sys.stderr)
         return 1
     if session.table.me is None:
-        print(f"Timed out connecting to {args.url}.", file=sys.stderr)
+        print(f"Timed out connecting to {url}.", file=sys.stderr)
         return 1
 
-    log.info("connected to %s as %s", args.url, session.table.me.label)
+    log.info("connected to %s as %s", url, session.table.me.label)
     build_server(session).run()
     return 0
 

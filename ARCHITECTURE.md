@@ -389,6 +389,14 @@ late is told how much fell off the front. On top of that, the turn a player
 actually takes: `the_turn_on_offer`, `answer_a_proposal`, `finish_my_turn`,
 `roll_my_death_save`.
 
+**Three ways into a session, and enrolment is not one of them.** A seat can log
+in with a username and password, sit down on a minted seat token, or — new — make
+its own account from an invite. That last one is deliberately *two* round trips:
+`_enrol` sends `ENROL`, waits for `ENROLLED`, and stops; the same client then
+logs in with the username and password it just chose. A host that admitted
+somebody straight off an enrolment would have a second door into a session, and
+it would be the one nobody looks at again. The code is used once and dropped.
+
 Two things the seat needs that a callback-shaped client did not. It **holds the
 offered turn** (`AgentSession.offered`), because reading it and answering it are
 two calls — and clears it on `ACTION_GONE`, or a withdrawn offer would be

@@ -28,6 +28,7 @@ from canon_keeper_protocol import (
     MessageType,
     ProtocolError,
     auth,
+    enrol,
     decode,
     encode,
 )
@@ -178,6 +179,7 @@ class AgentSession:
         on_said: Callable[["AgentSession", Member, str], Awaitable[None]],
         on_encounter: Callable[["AgentSession"], Awaitable[None]] | None = None,
         seat: str = "",
+        invite: str = "",
         on_action: Callable[["AgentSession", dict], Awaitable[None]] | None = None,
         on_translate: Callable[["AgentSession", dict], Awaitable[None]] | None = None,
     ) -> None:
@@ -188,6 +190,10 @@ class AgentSession:
         #: as that player and sees what they see; there is no password, because
         #: nobody -- not even their DM -- has one to give.
         self._seat = seat
+        #: An invite code, for a login that does not exist yet. Used once, to
+        #: make the account, and then thrown away -- what gets you in after that
+        #: is the username and password chosen here, the same as everybody else.
+        self._invite = enrol.clean_code(invite) if invite else ""
         self._on_said = on_said
         #: Called whenever the host says what the fight looks like. It is how
         #: an agent finds out the turn has come round to something it is
@@ -422,6 +428,8 @@ class AgentSession:
         if self._seat:
             await self._sit_down(socket)
             return
+        if self._invite:
+            await self._enrol(socket)
         await socket.send(encode(MessageType.HELLO, username=self._username))
 
         async with asyncio.timeout(LOGIN_TIMEOUT):
@@ -449,6 +457,52 @@ class AgentSession:
                     raise LoginFailed(str(message.get("message", "refused")))
                 if message.type == MessageType.WELCOME:
                     await self._dispatch(message)
+                    return
+                await self._dispatch(message)
+
+    async def _enrol(self, socket) -> None:
+        """Make the account from an invite, then stop.
+
+        Two round trips rather than one, on purpose: this makes the account and
+        says so, and the caller turns round and logs in with what it just chose.
+        A host that admitted somebody straight off an enrolment would have two
+        doors into a session, and the second would be the one nobody looks at
+        again. The same rule the app follows, for the same reason.
+
+        The code and the password both stay in this process. What goes on the
+        wire is a verifier sealed with material derived from the code, so the
+        host can tell a real invite from a guess without either ever being sent.
+        """
+        await socket.send(encode(MessageType.HELLO, username=self._username))
+        async with asyncio.timeout(LOGIN_TIMEOUT):
+            challenge = decode(await socket.recv(), max_bytes=MAX_HOST_FRAME_BYTES)
+            if challenge.type == MessageType.ERROR:
+                raise LoginFailed(str(challenge.get("message", "refused")))
+            if challenge.type != MessageType.CHALLENGE:
+                raise LoginFailed(f"expected a challenge, got {challenge.type}")
+            nonce = bytes.fromhex(str(challenge.get("nonce", "")))
+            if not nonce:
+                raise LoginFailed("the host sent an unusable challenge")
+
+            # Our salt, not the host's: there is no account yet for it to be
+            # consistent with.
+            try:
+                salt, verifier = auth.make_credentials(self._password)
+                sealed = enrol.seal(
+                    self._invite, nonce, self._username, salt, verifier
+                )
+            except (auth.AuthError, enrol.EnrolError) as exc:
+                raise LoginFailed(str(exc)) from exc
+
+            await socket.send(encode(MessageType.ENROL, **sealed))
+            while True:
+                message = decode(await socket.recv(), max_bytes=MAX_HOST_FRAME_BYTES)
+                if message.type == MessageType.ERROR:
+                    raise LoginFailed(str(message.get("message", "refused")))
+                if message.type == MessageType.ENROLLED:
+                    log.info("enrolled as %s", message.get("username", self._username))
+                    # Used up. Anything after this is an ordinary login.
+                    self._invite = ""
                     return
                 await self._dispatch(message)
 

@@ -5,6 +5,14 @@ What changed, from the point of view of someone running a game. See
 
 ## Unreleased
 
+### A seat can join on an invite
+
+- A seat had two ways in: an account that already existed, and a token the DM
+  minted for a stand-in. Neither is what a new player has, so an agent meant to
+  be the whole client had to borrow a login made somewhere else first. Pass the
+  invite once, choose your own password, and afterwards log in like anybody else.
+  The whole invite works as the address your MCP client is given.
+
 ## 0.6.3
 
 A player's seat can be played by something other than a person.
