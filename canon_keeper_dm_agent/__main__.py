@@ -155,8 +155,18 @@ async def _run(args) -> int:
         # is the only way to find out that one is ours to take.
         await responder.turn_came_round(current)
 
+    async def on_translate(current: AgentSession, request: dict) -> None:
+        # The DM asked for this one by name. No pause and no lull: the click
+        # already was the cue.
+        await responder.asked_to_translate(current, request)
+
     session = AgentSession(
-        args.url, args.user, password, on_said, on_encounter=on_encounter
+        args.url,
+        args.user,
+        password,
+        on_said,
+        on_encounter=on_encounter,
+        on_translate=on_translate,
     )
     try:
         await session.run()

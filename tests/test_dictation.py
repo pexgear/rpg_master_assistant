@@ -90,7 +90,7 @@ def test_a_failure_is_reported(table):
     """Errors are diagnostics: recorded in the log, and marked on the filter."""
     table._dictation.failed.emit("the microphone is busy")
 
-    assert any("microphone is busy" in text for _k, text, _w in table._entries)
+    assert any("microphone is busy" in line.text for line in table._entries)
     assert table._show_chatter.styleSheet(), "the filter should be marked"
 
 

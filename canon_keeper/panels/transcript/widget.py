@@ -35,7 +35,7 @@ from canon_keeper import config
 from canon_keeper.audio import capture, transcribe
 from canon_keeper.matching import EntityMatcher
 from canon_keeper.panels.transcript.view import TranscriptView
-from canon_keeper.plugin import AppContext
+from canon_keeper.plugin import REACH_EVERYWHERE, AppContext, ReservedKey
 from canon_keeper.repo.entities import Entity
 
 RECORD_SHORTCUT = "F9"
@@ -148,6 +148,23 @@ class TranscriptWidget(QWidget):
 
         self._populate_devices()
         self._check_availability()
+
+    def reserved_keys(self) -> list[ReservedKey]:
+        """Push-to-talk, and it reaches the whole machine on purpose.
+
+        The point of it is to record what you are saying *about* whatever you are
+        looking at, so a key that only worked while this panel had the focus would
+        be a key for talking about this panel. It costs F9 for everything else
+        running, which is the trade, and saying so here is what makes the trade
+        visible instead of surprising.
+        """
+        return [
+            ReservedKey(
+                RECORD_SHORTCUT,
+                "start and stop recording (push-to-talk)",
+                reach=REACH_EVERYWHERE,
+            )
+        ]
 
     def _populate_devices(self) -> None:
         self._device_combo.clear()

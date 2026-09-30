@@ -587,7 +587,7 @@ def test_your_turn_is_said_in_the_chat(chat):
         {"turn": 11, "combatants": [{"id": 11, "entity": 7, "x": 0, "y": 0}]}
     )
 
-    assert any(kind == "turn" for kind, _text, _at in widget._entries)
+    assert any(line.kind == "turn" for line in widget._entries)
 
 
 def test_it_is_said_once(chat):
@@ -599,7 +599,7 @@ def test_it_is_said_once(chat):
     widget._on_encounter_received(fight)
     widget._on_encounter_received(fight)
 
-    assert sum(1 for kind, _t, _a in widget._entries if kind == "turn") == 1
+    assert sum(1 for line in widget._entries if line.kind == "turn") == 1
 
 
 def test_somebody_elses_turn_says_nothing(chat):
@@ -611,7 +611,7 @@ def test_somebody_elses_turn_says_nothing(chat):
         {"turn": 99, "combatants": [{"id": 11, "entity": 7, "x": 0, "y": 0}]}
     )
 
-    assert not any(kind == "turn" for kind, _t, _a in widget._entries)
+    assert not any(line.kind == "turn" for line in widget._entries)
 
 
 # --------------------------------------------------- anything else, or done?

@@ -6,9 +6,11 @@ whole thing testable without spending anything.
 
 It is not clever, and it does not pretend to be. It closes to the nearest enemy
 and hits them, which is what an absent player's character would plausibly do
-and is a great deal better than standing still. A model, when there is one,
-decides instead -- see :mod:`canon_keeper_player_agent.brain` -- and this stays
-underneath it as the answer when the model cannot be reached.
+and is a great deal better than standing still. The intention is that a model
+decides instead once there is one to ask, with this underneath as the answer
+when it cannot be reached -- see "Still to come" in the README. There is no such
+module yet, and this said there was, which is the sort of cross-reference that
+stays plausible for a year.
 
 **It only ever reads what the host sent this seat.** A tactic that reached for
 something outside the projection would be the same cheating the seat exists to

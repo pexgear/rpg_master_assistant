@@ -320,6 +320,17 @@ def test_unreadable_status_json_is_survivable(cli):
 # ------------------------------------------------------------------ the panel
 
 
+@pytest.fixture(autouse=True)
+def own_data_dir(monkeypatch, tmp_path):
+    """Keep the published marker out of the real application data directory.
+
+    The panel reads it while it is being built, so without this the suite
+    would behave differently on a machine that happens to have a funnel left
+    over -- and would write to the developer's own app data to find out.
+    """
+    monkeypatch.setenv("CANONKEEPER_DATA_DIR", str(tmp_path))
+
+
 @pytest.fixture
 def table(ctx, qtbot):
     from canon_keeper.panels.table.widget import TableWidget
@@ -365,10 +376,10 @@ def test_a_refusal_leaves_the_session_up(table, monkeypatch):
 
     assert table._funnel_url == ""
     assert any(
-        "network still works" in text for _k, text, _w in table._entries
+        "network still works" in line.text for line in table._entries
     ), "the DM should be told the session is still up"
     assert not any(
-        kind == "error" for kind, _t, _w in table._entries
+        line.kind == "error" for line in table._entries
     ), "an unpublished session is not an error"
 
 
@@ -437,3 +448,119 @@ def test_every_change_signal_reaches_the_host(table):
     table._ctx.bus.share_changed.emit(3)
 
     assert published == [1, 2, 3], "a change signal is not reaching the host"
+
+
+# ------------------------------------------------- leaving it on by accident
+#
+# `tailscale funnel --bg` takes effect in the daemon, not in this process. So
+# the app closing is not the funnel closing, and anything the app forgets to
+# take down stays on the public internet -- across a restart, and across a
+# reboot.
+
+
+def test_closing_takes_down_a_publish_that_never_answered(table, monkeypatch):
+    """The address is not the thing to check. The request is.
+
+    A DM who presses Go online and closes the app before Tailscale answers had
+    no address recorded, so the old test for one skipped the takedown -- and
+    ``funnel --bg`` had already put the session on the internet by then. The
+    next launch starts with an empty address and no idea it is there.
+    """
+    stopped: list[bool] = []
+    monkeypatch.setattr(funnel, "stop", lambda *_a: stopped.append(True))
+    table._server = None
+    table._publishing = True  # asked for, no answer yet
+    assert table._funnel_url == ""
+
+    table.shutdown()
+
+    assert stopped, "the session was left published"
+    assert table._publishing is False
+
+
+def test_closing_does_not_ask_tailscale_about_a_session_never_published(
+    table, monkeypatch
+):
+    """The other half: no publish, no command. Every call spawns a process."""
+    stopped: list[bool] = []
+    monkeypatch.setattr(funnel, "stop", lambda *_a: stopped.append(True))
+    table._server = None
+
+    table.shutdown()
+
+    assert stopped == []
+
+
+def test_a_funnel_left_over_from_last_time_is_said_out_loud(ctx, qtbot):
+    """The case the app could not see at all: `funnel --bg` outlives it.
+
+    The configuration lives in the tailscaled daemon, so an unclean exit --
+    a crash, a kill, the power going -- leaves the machine published with
+    nothing here holding its address. A note beside the campaigns records it,
+    because the next run starts with an empty one and no way to know.
+    """
+    from canon_keeper.panels.table.widget import TableWidget
+
+    funnel.remember(8765)
+    widget = TableWidget(ctx)
+    qtbot.addWidget(widget)
+
+    assert widget._anything_published is True
+    assert any("8765" in line.text for line in widget._entries), (
+        "the DM was not told the machine is still published"
+    )
+    assert widget._leave_button.isEnabled(), "nothing on screen could take it down"
+
+
+def test_nothing_is_said_when_the_last_session_shut_down_cleanly(table):
+    """The other half. A note that cried wolf would stop being read."""
+    assert table._anything_published is False
+    assert not any("still published" in line.text for line in table._entries)
+
+
+def test_going_offline_clears_the_note_as_well_as_the_funnel(table, monkeypatch):
+    """A note outliving the funnel means being told again on the next launch."""
+    monkeypatch.setattr(funnel, "stop", lambda *_a: funnel.Result(True))
+    funnel.remember(8765)
+    table._publishing = True
+
+    table._stop_funnel()
+
+    assert funnel.left_over() is None
+
+
+def test_a_publish_that_never_ran_leaves_no_note(table, monkeypatch):
+    """Funnel switched off for the tailnet: the command is never run.
+
+    Nothing reaches the internet in that case, so claiming otherwise on the
+    next launch would be a false alarm -- and the whole value of the note is
+    that it is worth acting on.
+    """
+    monkeypatch.setattr(
+        type(table), "_report_funnel_problem", lambda self, result: None
+    )
+    funnel.remember(8765)
+    table._publishing = True
+
+    table._on_funnel_started(
+        funnel.Result(False, message="Funnel is not switched on", attempted=False)
+    )
+
+    assert funnel.left_over() is None
+    assert table._anything_published is False
+
+
+def test_a_publish_that_ran_and_then_failed_keeps_the_note(table, monkeypatch):
+    """Because by then it may well be published, and nobody here can tell."""
+    monkeypatch.setattr(
+        type(table), "_report_funnel_problem", lambda self, result: None
+    )
+    funnel.remember(8765)
+    table._publishing = True
+
+    table._on_funnel_started(
+        funnel.Result(False, message="timed out", attempted=True)
+    )
+
+    assert funnel.left_over() == 8765
+    assert table._anything_published is True

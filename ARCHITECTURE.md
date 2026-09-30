@@ -121,6 +121,9 @@ twenty without corrupting session three.
 **Derive, don't store.** Armour class, saving throws, spell slots and the rest
 are computed from the sheet on every read (`rules/derive.py`), with an
 `overrides` escape hatch. Stored derived values go stale silently.
+[`docs/character-sheets.md`](docs/character-sheets.md) has the rest of that
+decision and the layering it implies — `content/` and `rules/` import neither Qt
+nor the database, because the host runs them to check a player's edits.
 
 **An id is only unique inside its file.** Every campaign is its own SQLite file,
 so almost every campaign in existence is `campaign.id = 1`. Anything that tells
@@ -136,6 +139,16 @@ One SQLite file per campaign, in `campaigns/` under the per-OS data directory.
 Your own settings, theme and dock layout live separately in `profile.sqlite3`,
 so they follow you rather than the campaign — which also gives a player, whose
 campaign lives on someone else's machine, somewhere to keep them.
+
+Beside both sits `published.json`, and it is not settings: it records that a
+Tailscale funnel was asked for and not yet taken down. `funnel --bg` is
+configuration in the tailscaled daemon rather than a child process, so it
+outlives the app, a crash and a reboot, and nothing in a fresh run could
+otherwise tell it is there. It is written before the command that publishes and
+cleared when one takes it down; a Table panel that finds it says the machine may
+still be public, and lets Go offline end it. Machine-wide on purpose — a funnel
+published from one campaign is still published when a different one is opened,
+which is exactly what a per-campaign note would miss.
 
 Migrations are numbered `.sql` files driven by `PRAGMA user_version`:
 
@@ -155,6 +168,7 @@ Migrations are numbered `.sql` files driven by `PRAGMA user_version`:
 | `012_reactions.sql` | the round a combatant last used its reaction in |
 | `013_bodies_and_teams.sql` | who is lying down, and which side they are on |
 | `014_invites.sql` | one live invite per character, and what became of the rest |
+| `015_attacks_and_dash.sql` | what the action was spent on, and how many swings came out of it |
 
 `entity.data_json` is how "start small, then evolve" is paid for: new fields
 cost a form change, not a migration. The price is that nothing validates them,
@@ -273,6 +287,30 @@ usable by outsiders.
 `role`, `shared`, `names`, `pending_join`, `session_address`. Panels never
 import each other — they coordinate through `bus` signals, so a panel that is
 not installed simply does not exist rather than breaking its neighbours.
+
+**A key belongs to the panel you are looking at.** Qt's default is the opposite:
+an action owned by the window fires from anywhere in the window, so a panel's
+shortcut would go off while you were typing in another panel's chat box. So
+`PanelAction.reach` defaults to `REACH_PANEL` and the shell parents the action to
+the *panel*, adding it to the widget — a widget-scoped shortcut is only listened
+for by a widget that holds the action, so in a menu alone it would be drawn and
+never fire. `REACH_WINDOW` and `REACH_EVERYWHERE` exist and are deliberate:
+push-to-talk has to work while you are looking at the map, because the point of
+it is to record what you are saying *about* the map.
+
+This changes what a clash **is**, and the obvious answer is wrong. Two panels
+both using `Ctrl+N` is not a clash — only the focused one is listening, the way
+two applications both using Ctrl+N is not a clash. A real clash is two claims in
+the same reach, or a wider claim silently beating a narrower one so a panel's
+menu shows a shortcut that never fires. `shell/keys.py` decides which is which
+and `File ▸ Settings` shows them, clashing keys first.
+
+A panel also declares the keys it handles *itself*, through `reserved_keys()`.
+The map reads Space in its own `keyPressEvent`, so nothing outside it knows the
+key is taken: a panel claiming Space window-wide would win, and the map would go
+quiet with no error anywhere. Declared next to the handler rather than in the
+shell, because a list of somebody else's keys kept elsewhere goes stale the first
+time they add one.
 
 **A creature carries its menu with it.** `entity_actions` is the same idea one
 level down: right-clicking a character offers what this panel can do *first*,
@@ -469,6 +507,21 @@ the host rolls it. Three parties, and none of them can skip the others:
   the rest of the app stays open, because being asked what your character does
   is not a reason to stop being able to look something up.
 
+There are two ways a proposal comes to be written, and they differ in who
+decided to write it. Autopilot decides for itself, after a lull, and is gated on
+autopilot being on. The DM can also point at a line in the chat and ask —
+`TRANSLATE {member, text}`, which the host turns into `TRANSLATE_THIS` to the
+agent alone. That one has to work with autopilot **off**, because it is for the
+evening where somebody is running their own table and wants one sentence worked
+out, so the host issues a **grant**: one proposal, for the creature whose turn it
+is, spent the moment it is used.
+
+The grant lives in `_may_propose` and deliberately not in `_may_run_the_table`.
+That predicate answers for moving a token, passing the turn and setting an
+initiative all at once; widening it so one translation could be asked for would
+have handed over the other three as well. A proposal is the one authority worth
+granting alone, because it is an offer — the player still has to accept it.
+
 `rules/attack.py` is deliberately the simple case: a weapon off the sheet, a
 d20, reach of one square. No spells, no advantage, no opportunity attacks.
 Those are rulings a DM makes, and a machine that made half of them would be
@@ -530,6 +583,40 @@ tokens: the referee exists offline, but everything it described went to a
 session dict that was empty. `SessionServer.played` is the bypass, emitted only
 when there are no sessions at all — hosting always joins the DM's own client, so
 the signal and the wire never both fire for the same move.
+
+### The map in 3D
+
+The map people see is 3D. `panels/encounter/view3d.py` stands it up — obstacles
+as walls, creatures as figures — and is **a way of drawing `GridMap`, not a
+replacement for it**. `GridMap` is still built and still owns the fight's state
+and the meaning of a click; it is simply never shown, except as the fallback
+on a machine whose Qt cannot build the scene. The zoom and ruler notes above
+describe that flat drawing; the 3D camera fits the room the same way until
+somebody moves it, and the coordinates follow the board's edges instead of
+being pinned to the panel. The 3D view keeps nothing about the fight. Every frame is read off the flat map (tokens,
+walls, the walk being pointed at, the turn on offer, the numbers rising), and
+every click goes back through `GridMap.press_square`, the same door a click on
+the flat map goes through. So what a click means, what a player may not do with
+one, and the whole walk-and-wheel sequence are decided once, and a DM looking in
+3D and a player looking flat are watching one fight.
+
+Three things hold it together:
+
+- **`GridMap.update` announces.** Every change to what is drawn already ends in
+  a repaint, so `update` emits `shown` as well, and the 3D view reads on that.
+  A change somebody adds later and only thinks to repaint for still reaches it.
+- **Animation is placed in squares.** `GridMap.placement` says where a token is
+  at a given moment in map coordinates, and the flat map turns that into pixels
+  just as the 3D view turns it into a spot on the floor. One easing, one walk.
+- **There is no height.** A wall is a blocked square, drawn tall. Nothing in the
+  rules, the wire or the agents knows the 3D view exists, and it must stay that
+  way until elevation is a rule rather than a picture.
+
+The wheel is a menu in 3D, at the pointer: a ring painted on a tilted floor is
+an ellipse you read sideways. It carries the same choices to `GridMap.choose`.
+Qt Quick 3D needs a GPU, so a headless test can load the scene and drive
+everything it is told, but cannot look at a pixel of it; a machine whose Qt
+cannot build it is shown the flat map, and the reason is logged.
 
 ### Bending the rules
 
@@ -818,8 +905,13 @@ sequenceDiagram
     participant P as Player
     participant H as Host
     participant A as Agent
+    participant D as DM
     P->>H: CHAT "I get behind the orc and hit it with my axe"
     H->>A: SAID
+    Note over A: with autopilot on, after a lull, the agent decides for itself
+    D->>H: TRANSLATE {member, text}
+    Note over H: or the DM asks. One proposal granted, for whoever is up
+    H->>A: TRANSLATE_THIS {combatant, who, said}
     Note over A: translate into squares and a weapon
     A->>H: PROPOSE {combatant, move, target, weapon, text}
     Note over H: legal square? free? in the fight?<br/>refused here, before anybody is shown it
@@ -872,7 +964,8 @@ canon_keeper/
   campaigns.py      campaign files, and campaign_key()
   credentials.py    OS credential store, degrades rather than fails
   agent_runner.py   creating the agent login and supervising its process
-  shell/            main window, docking, layouts, plugin loader, startup
+  shell/            main window, docking, layouts, plugin loader, startup,
+                    keyboard reach and the settings dialog
   db/               connection, migrate, migrations/
   repo/             one module per table
   net/              server, client, projection, cache, discovery, funnel, state
@@ -931,14 +1024,27 @@ Written down so they are choices rather than surprises.
   reach. No spells, no advantage, no sneak attack, and everyone is assumed
   proficient with what they are carrying. Opportunity attacks *are* here, and
   are the one thing the app rules on unasked.
-- **One action, and no bonus actions.** A turn here is a move and one attack.
-  Dash, Dodge, Disengage, Hide, Help and Ready do not exist, and neither does
-  Extra Attack — a fighter at level five still gets one swing. The only
-  reaction that exists is the opportunity attack, one a round.
-- **A proposal still carries one move and one attack, in that order**, even
-  though the budget allows splitting movement around the action and the map now
-  permits it: the wheel can be opened again after a swing. The formalised path
-  autopilot writes has not caught up with the one a hand takes.
+- **One action, and no bonus actions.** A turn is a move and one action. **Dash**
+  is here and **Extra Attack** works -- a level-five fighter gets two swings, off
+  the SRD's own level tables rather than a list of classes kept in `rules/`.
+  Dodge, Disengage, Hide, Help and Ready do not exist.
+- **The reaction exists for exactly one thing.** Leaving somebody's reach draws
+  their swing, one per round per creature, tracked as
+  `combatant.reaction_round`. Nothing else spends a reaction and nothing else
+  can be readied into one.
+- **A proposal carries one move and one attack; a turn does not.** A turn is an
+  ordered list of steps -- `canon_keeper_protocol.turns` -- and `take_turn_steps`
+  walks it, re-reading position, budget *and* consciousness between each and
+  returning how far it got, because a turn that stops halfway has already spent
+  the part that happened and whoever is holding it must stop holding that much.
+  The `{move, target, weapon}` shorthand normalises into a two-step sequence, so
+  every older caller still works and the wire did not move. The DM's map stages a
+  full sequence; **`offer_turn` refuses one it cannot express** rather than
+  sending a player a shortened version of what was lined up.
+- **What the action was spent on is recorded, not just that it is gone.**
+  `action_used` says spent; `attacks_made` and `dashed` say what became of it.
+  Extra Attack needs the first (one action, two swings) and Dash needs the second
+  (the allowance doubles, which a swing must not buy).
 - **Inventory is free text, and only the DM's side fills it.** `GIVE` appends a
   line to `entity.data.inventory`, which is what a person writes their own way
   — "3 torches", "the bent iron key". Autopilot calls it when somebody picks

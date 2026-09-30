@@ -88,6 +88,15 @@ class MessageType(StrEnum):
     FIGHT = "fight"        # {name, width, height} -- start a new one
     ENLIST = "enlist"      # {entity, x, y, initiative} -- into the fight
     TERRAIN = "terrain"    # {x, y, on} -- something in the way, or not
+    #: {member, text} -- the DM pointing at something a player said and asking
+    #: for it in rules. The DM's door only: it buys the agent one proposal for
+    #: that player's character and nothing else, so it works with autopilot
+    #: off, which is the case it exists for.
+    #:
+    #: It names the *speaker*, not a token. Which creature that is is the
+    #: host's to work out -- it is the half of "who plays this character" that
+    #: a client cannot see and must never be trusted to assert.
+    TRANSLATE = "translate"
     #: A formalised turn, put to the player whose character it is. The agent
     #: writes it, the host checks it, and nothing happens until they say yes.
     PROPOSE = "propose"    # {combatant, move, target, weapon, text}
@@ -126,6 +135,11 @@ class MessageType(StrEnum):
     #: do not allow. Put to the DM, who may say the rules bend today.
     BEND = "bend"
     BEND_GONE = "bend_gone"  # {id} -- answered, or overtaken
+    #: {combatant, who, said} -- a line the DM wants turned into a turn. Sent
+    #: to the agent alone, and only ever because a DM asked for it: the agent
+    #: does not decide to translate anything, which is what keeps this usable
+    #: while the DM is still running the table themselves.
+    TRANSLATE_THIS = "translate_this"
     #: Something to *show* on the map: a walk, a swing, a hit, a creature
     #: going down. Sent because everyone should see the same thing happen --
     #: a client working it out from two states it was sent would draw its own

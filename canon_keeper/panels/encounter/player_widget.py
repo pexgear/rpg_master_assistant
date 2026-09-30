@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from canon_keeper.panels.encounter.grid import Choice, GridMap, Preview, Token
+from canon_keeper.panels.encounter.view3d import MapView
 from canon_keeper.plugin import AppContext
 from canon_keeper.repo.entities import KIND_PC
 from canon_keeper.rules import death
@@ -63,7 +64,10 @@ class PlayerEncounterWidget(QWidget):
         # taking your turn on the map is the whole point of there being one.
         self._map.radial_wanted.connect(self._offer_wheel)
         self._map.planned.connect(self._carry_out)
-        splitter.addWidget(self._map)
+        # Seen in 3D. The panel still talks only to `_map`, which holds the
+        # fight; the view is how it is drawn.
+        self._view = MapView(self._map)
+        splitter.addWidget(self._view)
         splitter.setStretchFactor(1, 1)
         outer.addWidget(splitter, 1)
 

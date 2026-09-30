@@ -12,6 +12,7 @@ race with the machine.
 from __future__ import annotations
 
 import asyncio
+import threading
 
 import pytest
 
@@ -468,3 +469,83 @@ async def test_a_failure_to_report_the_failure_is_survivable(spoken):
     )
     await responder.heard(_Session(), _Member("player"), "hello")
     await _settle()  # must not raise
+
+
+# ------------------------------------------------- a line the DM asked about
+
+
+@pytest.mark.asyncio
+async def test_a_line_the_dm_asked_about_is_answered_at_once(responder, turns):
+    """No lull. The click was the cue -- there is nothing left to wait for."""
+    session = _Session()
+    await responder.asked_to_translate(
+        session, {"who": "Brok", "said": "I get behind the orc and hit it"}
+    )
+
+    assert len(turns) == 1, "it waited for a pause nobody was going to leave"
+    asked = " ".join(text for _label, text in turns[0])
+    assert "I get behind the orc and hit it" in asked
+    assert "propose_turn" in asked, "the model was not told how to answer"
+
+
+@pytest.mark.asyncio
+async def test_the_dm_can_ask_with_autopilot_off(responder, turns):
+    """The evening this exists for, and the one the lull path refuses.
+
+    Autopilot off means the agent does nothing of its own accord. Being asked
+    is not of its own accord, and the host grants exactly one proposal for it
+    -- so the gate that belongs here is none at all.
+    """
+    session = _Session(autopilot=False)
+    await responder.asked_to_translate(session, {"who": "Brok", "said": "I hit it"})
+
+    assert len(turns) == 1, "a line the DM asked about went unanswered"
+
+
+@pytest.mark.asyncio
+async def test_being_asked_twice_over_says_so_rather_than_queueing(turns):
+    """A click that produces nothing for ten seconds reads as a broken button.
+
+    One answer at a time is the rule everywhere in this class. What differs
+    here is that somebody is waiting on a thing they just pressed, so the
+    second click is answered with a sentence rather than joining a queue it
+    cannot see.
+    """
+    trouble: list[str] = []
+    started = threading.Event()
+    finish = threading.Event()
+
+    def answer(_table, lines):
+        turns.append(list(lines))
+        started.set()
+        # Blocking, exactly as the real model call is -- it runs off the loop.
+        finish.wait(timeout=5)
+        return ""
+
+    async def say(_text: str) -> None:
+        return None
+
+    async def on_trouble(message: str) -> None:
+        trouble.append(message)
+
+    responder = Responder(answer, say, quiet_for=PAUSE, on_trouble=on_trouble)
+    session = _Session(autopilot=False)
+
+    first = asyncio.create_task(
+        responder.asked_to_translate(session, {"who": "Brok", "said": "I hit it"})
+    )
+    await asyncio.to_thread(started.wait, 5)
+
+    await responder.asked_to_translate(session, {"who": "Brok", "said": "Again"})
+    assert len(trouble) == 1, "the second click was silently dropped"
+    assert "Brok" in trouble[0]
+
+    finish.set()
+    await first
+    assert len(turns) == 1, "two model calls for one answer in flight"
+
+
+@pytest.mark.asyncio
+async def test_an_empty_line_is_not_worth_a_model_call(responder, turns):
+    await responder.asked_to_translate(_Session(), {"who": "Brok", "said": "   "})
+    assert turns == []

@@ -39,6 +39,32 @@ API_VERSION = 2
 #: The entry-point group scanned at startup.
 ENTRY_POINT_GROUP = "canonkeeper.panels"
 
+# ------------------------------------------------------------- how far a key goes
+#
+# **A key belongs to the panel you are looking at.** That is the default, and it
+# is the default because the alternative does not survive a second panel: a
+# window-wide key is claimed by whichever panel declared it first and then fires
+# while you are typing in the chat box, reading the transcript, or naming a
+# creature -- none of which asked for it.
+#
+# Panel-scoped keys also stop clashing with each other. Two panels may both use
+# the same key for their own version of a thing, the way two applications both
+# use Ctrl+N, because only one of them is ever listening.
+#
+# The wider reaches exist and are deliberate rather than forbidden. Push-to-talk
+# is the honest example: F9 has to work while you are looking at the map, because
+# the point of it is to record what you are saying *about* the map.
+
+#: While the focus is inside this panel. The default, and where a key should be
+#: unless there is a reason.
+REACH_PANEL = "panel"
+#: Anywhere in the Canon Keeper window, whichever panel has the focus. For
+#: something that is about the whole app rather than about one panel.
+REACH_WINDOW = "window"
+#: Even when another application is in front. Costs the key for everything else
+#: running on the machine, so it wants a strong reason and an unusual key.
+REACH_EVERYWHERE = "everywhere"
+
 
 @dataclass(frozen=True)
 class PanelAction:
@@ -56,14 +82,46 @@ class PanelAction:
 
     label: str
     run: "Callable[[], None]"
-    #: A key sequence, e.g. "Ctrl+Shift+N". Empty for none. The shell does not
-    #: check for clashes: two panels claiming the same key is a thing their
-    #: authors have to sort out between them, and Qt shows both.
+    #: A key sequence, e.g. "Ctrl+Shift+N". Empty for none. It reaches as far as
+    #: :attr:`reach` says and no further, so two panels may claim the same key
+    #: without either having to know about the other.
     shortcut: str = ""
+    #: How far that key reaches: ``REACH_PANEL`` (the default), ``REACH_WINDOW``
+    #: or ``REACH_EVERYWHERE``. See the note above them. A menu item is always
+    #: clickable whatever this says -- reach is about the *key*, not about the
+    #: action, and a menu that greyed itself out depending on where the focus was
+    #: would be a menu you could not use.
+    reach: str = REACH_PANEL
     #: Shown greyed when False. Evaluated when the menu is built, so a panel
     #: that wants this to change should say so on the bus and let the shell
     #: rebuild rather than holding a reference to the action.
     enabled: bool = True
+
+
+@dataclass(frozen=True)
+class ReservedKey:
+    """A key a panel handles itself, rather than through a menu item.
+
+    Declared so it can be *reported*. The map reads Space in its own key handler
+    and nothing outside it knows: a panel taking Space window-wide would simply
+    win, and the map would go quiet -- no error, no warning from Qt, just a grid
+    ignoring the key its own tooltip documents.
+
+    A panel lists these from ``reserved_keys()``, the way it lists its menu items
+    from ``panel_actions()``. Next to the handler rather than in the shell,
+    because a list of somebody else's keys kept somewhere else goes stale the
+    first time they add one.
+
+    It buys a mention in the report and nothing else. The key still works because
+    the panel's own handler runs, not because anything here arranged it.
+    """
+
+    key: str
+    #: What pressing it does, for a person reading the report.
+    what: str = ""
+    #: Almost always the default. A panel whose own handler is reached only when
+    #: it has the focus is a panel-reach key, whatever else it might wish.
+    reach: str = REACH_PANEL
 
 
 @dataclass(frozen=True)

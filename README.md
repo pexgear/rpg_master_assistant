@@ -269,8 +269,17 @@ because the `tailscale` command itself does something unhelpful here: it prints
 the instructions and then sits there waiting for you to act, looking like a
 hang.
 
-Sharing stops when you leave the session or close the app, so the tunnel never
-outlives the game.
+Sharing stops when you leave the session or close the app normally — and that
+last word is doing real work. The address lives in
+Tailscale's own background service rather than inside Canon Keeper, so a crash —
+or quitting before it has finished publishing — can leave your machine published
+with nothing behind it. Canon Keeper writes down that it published, notices a
+leftover on the next launch, and says which port is still public; **Go offline**
+takes it down. It does not do that for you unasked, because a public address is
+yours to keep or drop.
+
+If you want to check by hand, `tailscale funnel status` says what your machine is
+serving.
 
 **Copy invite** gives you the right address to send either way: the public one
 when you are sharing, your LAN address otherwise.
@@ -346,6 +355,24 @@ lives on someone else's machine, still has somewhere to keep them.
 Set `CANONKEEPER_DATA_DIR` to put it somewhere else, for example on a synced
 drive.
 
+## The keyboard
+
+**A key belongs to the panel you are looking at.** Press Space on the map and
+the map answers; press it while you are typing in the chat box and you get a
+space. Two panels can use the same key for their own version of a thing, because
+only the one with the focus is listening.
+
+A few keys reach further, on purpose. **F9** starts and stops recording wherever
+you are — including while another application is in front — because the point of
+it is to record what you are saying *about* whatever you are looking at.
+
+**File ▸ Settings ▸ Keyboard** lists the lot: every key, which panel owns it, how
+far it reaches and what it does. If a key will not do what its menu says —
+because something with a longer reach took it — that one is at the top, in bold,
+with a sentence saying who took it. That is worth a page of its own because it is
+the one thing about this app you cannot find out by looking at it: "why does
+Ctrl+N do nothing in here" is answered by knowing what *else* claimed Ctrl+N.
+
 ## Panels
 
 **Characters** — NPCs and PCs, narrative-first: who they are, what they want,
@@ -383,6 +410,17 @@ view a square at a time, and `0` puts the whole map back on screen. Until you
 zoom, the map sizes itself to the panel and keeps doing so as you move the dock
 around. How big the room is belongs to the fight itself — **Fight…** in the
 Combat menu.
+
+**The map is 3D**: obstacles stand up as walls and creatures as figures, for
+you and for your players. Drag with the left button to turn the room round, and
+with the middle button — or Shift and the left, on a touchpad — to slide it. The
+buttons in its top-left corner get you back to a view you know — **Tilted**
+(also `0`, or **Whole map** in the Combat menu) and **From above** (**Ctrl+9**),
+which is straight down like a sheet of squared paper — and **Low walls** knocks
+the walls down to a kerb when one is hiding what is behind it. The square
+numbers run along the near and left edges, whichever way the room is turned.
+Walls are only walls: there is no height, and nobody can climb or see over
+anything.
 
 Squares are numbered from the middle: **0,0 is the centre**, x to the right and
 y downwards, so "the one at minus three, two" is a square everybody can find —
@@ -615,6 +653,19 @@ it. Dropped on the way out, you fall on the square you left.
 It is deliberately the simple case — a weapon on your sheet, one attack, no
 spells. Everything else is still a DM's ruling, which is where it belongs.
 
+**You can also ask for it, one line at a time.** Turn on *Offer to turn what a
+player says into a turn* in **Agent…** and, while a fight is running, a small
+mark appears beside what the player whose turn it is has said. Click it and the
+agent writes that line as a move and an attack and puts it to them, exactly as
+above — the difference is only who decided to ask.
+
+**Autopilot does not have to be on for that.** It is meant for the evening where
+you are running the table yourself and want one sentence worked out rather than
+argued about. Asking buys the agent one proposal, for the creature whose turn it
+is, and nothing else: it cannot move a token, pass the turn or set an initiative
+on the strength of it, and your player still accepts or refuses. It costs a model
+call each time you click the mark, and nothing when you do not.
+
 ### Turns you take yourself
 
 You do not need autopilot to run a fight. **Attack…** in the Combat panel asks
@@ -683,14 +734,15 @@ while this has to build one.
 
 ## How it is put together
 
-Four packages, and the arrows only point one way:
+Six packages, and the arrows only point one way:
 
 | Package | Is | Needs |
 |---|---|---|
 | `canon_keeper_protocol` | the wire contract | the standard library, and nothing else |
 | `canon_keeper_client` | a headless connection | `websockets` |
 | `canon_keeper` | the app, and the host | PySide6 |
-| `canon_keeper_dm_agent` / `canon_keeper_mcp` | things that connect | `anthropic` / `mcp` |
+| `canon_keeper_dm_agent` / `canon_keeper_mcp` | things that connect to speak | `anthropic` / `mcp` |
+| `canon_keeper_player_agent` | one character, played while its player is away | the standard library |
 
 Nothing outside the app imports the app. That is what lets an agent run on a
 spare box without installing 660 MB of Qt, and it is what makes "a client cannot

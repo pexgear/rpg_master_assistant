@@ -21,6 +21,7 @@ import pytest
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
 from PySide6.QtGui import QKeyEvent, QMouseEvent
 
+from canon_keeper_protocol import turns
 from canon_keeper.panels.encounter.grid import Choice, GridMap, Token, TurnPlan
 
 
@@ -369,31 +370,254 @@ def test_space_out_of_turn_says_so(combat):
     assert said and "not" in said[0].lower()
 
 
-def test_a_plan_becomes_a_turn(combat, qtbot):
-    """One dict to the host, the same one the Attack dialog sends."""
+# ------------------------------------------------------------ staging a turn
+#
+# Each wedge used to fire the moment it was picked, so "walk over there and
+# swing" was two commitments with no way back from the first -- and the DM could
+# not compose the move-and-attack that autopilot composes through `take_turn` and
+# that a player is shown and accepts. Now it is lined up, read, and committed.
+
+
+def _staged(widget):
+    return widget._staged_steps
+
+
+def test_a_staged_turn_becomes_a_turn_when_it_is_committed(combat, qtbot):
+    """One dict to the host, carrying the steps in the order they were picked."""
     widget, _repos, _enc, tokens = combat
 
-    with qtbot.waitSignal(widget._ctx.bus.turn_taken) as caught:
-        widget._carry_out(
-            TurnPlan(
-                combatant=tokens["hero"].id,
-                target=tokens["goblin"].id,
-                weapon="Battleaxe",
-            )
+    widget._stage(
+        TurnPlan(
+            combatant=tokens["hero"].id,
+            target=tokens["goblin"].id,
+            weapon="Battleaxe",
         )
+    )
+    with qtbot.waitSignal(widget._ctx.bus.turn_taken) as caught:
+        widget._commit_staged()
 
     assert caught.args[0] == {
         "combatant": tokens["hero"].id,
-        "target": tokens["goblin"].id,
-        "weapon": "Battleaxe",
+        "steps": [turns.a_swing(tokens["goblin"].id, "Battleaxe")],
     }
 
 
-def test_an_empty_plan_is_not_sent(combat):
+def test_picking_something_does_not_carry_it_out(combat):
+    """The point of staging: nothing leaves this panel until it is committed."""
     widget, _repos, _enc, tokens = combat
     sent = []
     widget._ctx.bus.turn_taken.connect(sent.append)
 
-    widget._carry_out(TurnPlan(combatant=tokens["hero"].id))
+    widget._stage(TurnPlan(combatant=tokens["hero"].id, move=(1, 1)))
+
+    assert sent == [], "a picked wedge went straight to the host"
+    assert _staged(widget) == [turns.a_move(1, 1)]
+
+
+def test_a_move_and_an_attack_stage_as_one_turn(combat, qtbot):
+    """Two picks, one turn -- the thing the DM could not do at all."""
+    widget, _repos, _enc, tokens = combat
+
+    widget._stage(TurnPlan(combatant=tokens["hero"].id, move=(1, 1)))
+    widget._stage(
+        TurnPlan(
+            combatant=tokens["hero"].id,
+            target=tokens["goblin"].id,
+            weapon="Battleaxe",
+        )
+    )
+    with qtbot.waitSignal(widget._ctx.bus.turn_taken) as caught:
+        widget._commit_staged()
+
+    assert caught.args[0]["steps"] == [
+        turns.a_move(1, 1),
+        turns.a_swing(tokens["goblin"].id, "Battleaxe"),
+    ]
+
+
+def test_a_second_move_is_another_leg_of_the_walk(combat):
+    """Appended, not replaced. This is what splitting a move around the action is.
+
+    While a turn carried one move and one attack in that order, picking a second
+    move could only mean "no, there instead". A turn made of steps can mean
+    "three squares, swing, three more", so it does.
+    """
+    widget, _repos, _enc, tokens = combat
+
+    widget._stage(TurnPlan(combatant=tokens["hero"].id, move=(1, 1)))
+    widget._stage(
+        TurnPlan(
+            combatant=tokens["hero"].id,
+            target=tokens["goblin"].id,
+            weapon="Battleaxe",
+        )
+    )
+    widget._stage(TurnPlan(combatant=tokens["hero"].id, move=(2, 2)))
+
+    assert _staged(widget) == [
+        turns.a_move(1, 1),
+        turns.a_swing(tokens["goblin"].id, "Battleaxe"),
+        turns.a_move(2, 2),
+    ]
+
+
+def test_staging_for_somebody_else_starts_again(combat):
+    """Two half-turns for two creatures is not a thing anybody meant to ask."""
+    widget, _repos, _enc, tokens = combat
+
+    widget._stage(TurnPlan(combatant=tokens["hero"].id, move=(1, 1)))
+    widget._stage(TurnPlan(combatant=tokens["goblin"].id, move=(3, 3)))
+
+    assert widget._staged_for == tokens["goblin"].id
+    assert _staged(widget) == [turns.a_move(3, 3)]
+
+
+def test_clearing_leaves_nothing_to_commit(combat):
+    widget, _repos, _enc, tokens = combat
+    sent = []
+    widget._ctx.bus.turn_taken.connect(sent.append)
+
+    widget._stage(TurnPlan(combatant=tokens["hero"].id, move=(1, 1)))
+    widget._clear_staged()
+    widget._commit_staged()
 
     assert sent == []
+    assert _staged(widget) == []
+
+
+def test_an_empty_plan_is_not_staged(combat):
+    widget, _repos, _enc, tokens = combat
+    sent = []
+    widget._ctx.bus.turn_taken.connect(sent.append)
+
+    widget._stage(TurnPlan(combatant=tokens["hero"].id))
+    widget._commit_staged()
+
+    assert sent == []
+
+
+def test_the_bar_says_the_whole_turn_in_order(combat):
+    """In words, because a dotted line cannot say which weapon or in what order.
+
+    The same sentence builder the host puts on a proposal, from
+    ``canon_keeper_protocol.turns`` -- one definition, so the DM's bar and a
+    player's accept bar cannot come to describe the same steps differently.
+    """
+    widget, _repos, _enc, tokens = combat
+
+    assert widget._staged_bar.isHidden(), "furniture when there is nothing"
+
+    widget._stage(TurnPlan(combatant=tokens["hero"].id, move=(1, 1)))
+    widget._stage(
+        TurnPlan(
+            combatant=tokens["hero"].id,
+            target=tokens["goblin"].id,
+            weapon="Battleaxe",
+        )
+    )
+    widget._stage(TurnPlan(combatant=tokens["hero"].id, move=(2, 2)))
+
+    said = widget._staged_text.text()
+    assert "1,1" in said and "2,2" in said
+    assert "Battleaxe" in said
+    assert "then" in said, f"the order was not readable: {said!r}"
+
+    widget._clear_staged()
+    assert widget._staged_bar.isHidden()
+
+
+def test_the_map_is_shown_where_the_turn_ends(combat):
+    """Feedback where the DM is looking, not only in the bar below."""
+    widget, _repos, _enc, tokens = combat
+
+    widget._stage(TurnPlan(combatant=tokens["hero"].id, move=(1, 1)))
+    widget._stage(TurnPlan(combatant=tokens["hero"].id, move=(2, 2)))
+
+    preview = widget._map._preview
+    assert preview is not None, "the map was told nothing"
+    assert preview.token == tokens["hero"].id
+    assert preview.to == (2, 2), "it drew a waypoint rather than the destination"
+
+    widget._clear_staged()
+    assert widget._map._preview is None
+
+
+def test_the_attack_dialog_stages_once_a_fight_is_running(combat, monkeypatch):
+    """The dialog and the wheel are the same turn, so they wait the same way."""
+    widget, _repos, _enc, tokens = combat
+    sent = []
+    widget._ctx.bus.turn_taken.connect(sent.append)
+
+    class _Asked:
+        def ask(self):
+            return tokens["goblin"].id, "Battleaxe"
+
+    monkeypatch.setattr(
+        "canon_keeper.panels.encounter.widget.AttackDialog",
+        lambda *a, **k: _Asked(),
+    )
+
+    widget._attack()
+
+    assert sent == [], "the dialog went straight to the host"
+    assert _staged(widget) == [turns.a_swing(tokens["goblin"].id, "Battleaxe")]
+
+
+# ------------------------------------------- what is left of a refused turn
+
+
+def test_the_part_that_happened_stops_being_staged(combat):
+    """Three squares and then a refused swing is three squares spent.
+
+    Committing again must not walk them a second time, so the host says how far
+    it got and the walk is dropped. What is left is the swing, which is the thing
+    to adjust.
+    """
+    widget, _repos, _enc, tokens = combat
+    widget._stage(TurnPlan(combatant=tokens["hero"].id, move=(1, 1)))
+    widget._stage(
+        TurnPlan(
+            combatant=tokens["hero"].id,
+            target=tokens["goblin"].id,
+            weapon="Battleaxe",
+        )
+    )
+
+    widget._ctx.bus.turn_settled.emit(False, "that is 20 feet away -- too far", 1)
+
+    assert _staged(widget) == [turns.a_swing(tokens["goblin"].id, "Battleaxe")]
+    assert "too far" in widget._staged_text.text()
+    assert not widget._staged_bar.isHidden(), "still on offer to be fixed"
+
+
+def test_a_turn_refused_outright_stays_whole(combat):
+    """Nothing happened, so there is nothing to drop."""
+    widget, _repos, _enc, tokens = combat
+    widget._stage(TurnPlan(combatant=tokens["hero"].id, move=(1, 1)))
+
+    widget._ctx.bus.turn_settled.emit(False, "somebody is already there", 0)
+
+    assert _staged(widget) == [turns.a_move(1, 1)]
+    assert "already there" in widget._staged_text.text()
+
+
+def test_a_turn_that_happened_is_cleared(combat):
+    widget, _repos, _enc, tokens = combat
+    widget._stage(TurnPlan(combatant=tokens["hero"].id, move=(1, 1)))
+
+    widget._ctx.bus.turn_settled.emit(True, "", 1)
+
+    assert _staged(widget) == []
+    assert widget._staged_bar.isHidden()
+
+
+def test_a_refused_turn_can_still_be_cleared_outright(combat):
+    """Keeping it must not mean being stuck with it."""
+    widget, _repos, _enc, tokens = combat
+    widget._stage(TurnPlan(combatant=tokens["hero"].id, move=(1, 1)))
+    widget._ctx.bus.turn_settled.emit(False, "too far", 0)
+
+    widget._clear_staged()
+
+    assert _staged(widget) == []
+    assert widget._staged_bar.isHidden()

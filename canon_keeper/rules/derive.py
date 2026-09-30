@@ -288,6 +288,19 @@ def cantrips_known(sheet: dict, content) -> int:
     return int(((row or {}).get("spellcasting") or {}).get("cantrips_known", 0) or 0)
 
 
+def attacks_per_action(sheet: dict, content) -> int:
+    """How many swings one Attack action produces. At least one.
+
+    Read off the SRD's own level tables rather than from a list of classes kept
+    here: the level row already carries ``extra_attacks``, so a fighter gets two
+    at five and three at eleven without this file knowing anything about
+    fighters. Derived, never stored -- the same rule as everything else here.
+    """
+    row = content.level_row(sheet.get("class_index", ""), int(sheet.get("level", 1)))
+    extra = int(((row or {}).get("class_specific") or {}).get("extra_attacks", 0) or 0)
+    return 1 + max(0, extra)
+
+
 # ------------------------------------------------------------------- summaries
 
 

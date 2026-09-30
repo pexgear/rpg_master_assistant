@@ -172,6 +172,7 @@ class AgentSession:
         on_encounter: Callable[["AgentSession"], Awaitable[None]] | None = None,
         seat: str = "",
         on_action: Callable[["AgentSession", dict], Awaitable[None]] | None = None,
+        on_translate: Callable[["AgentSession", dict], Awaitable[None]] | None = None,
     ) -> None:
         self._url = url
         self._username = username
@@ -189,6 +190,11 @@ class AgentSession:
         #: yes. Only ever arrives on a connection that plays a character --
         #: which, for a stand-in, is the whole of what it is here to answer.
         self._on_action = on_action
+        #: A line the DM has pointed at and asked to have written as a turn.
+        #: Unlike everything else here it is not something noticed, it is
+        #: something requested -- so it is answered at once rather than after
+        #: the pause the rest of a turn waits for.
+        self._on_translate = on_translate
         self._socket: Any = None
         self.table = Table()
         #: Set every time the host tells us what the fight looks like. A tool
@@ -517,6 +523,10 @@ class AgentSession:
             # `watching` is the DM's copy: something to see, not to answer.
             if not message.get("watching") and self._on_action is not None:
                 await self._on_action(self, dict(message.payload))
+
+        elif message.type == MessageType.TRANSLATE_THIS:
+            if self._on_translate is not None:
+                await self._on_translate(self, dict(message.payload))
 
         elif message.type == MessageType.ERROR:
             log.warning(

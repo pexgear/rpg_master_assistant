@@ -351,6 +351,35 @@ def test_enlisting_somebody_who_does_not_exist_is_refused(qtbot, live, table):
         agent.leave()
 
 
+def test_enlisting_onto_a_square_the_map_does_not_have_is_refused(qtbot, live, table):
+    """And said out loud, because silence is what autopilot narrates over.
+
+    This door wrote the square straight to the database, so a goblin could be
+    stood outside the room -- and the agent, told nothing, would describe it
+    standing there. The square is the same three facts everywhere else asks
+    about, and none of them is a rule the DM can wave through.
+    """
+    repos, campaign_id, _marco, _old_fight, _hero, _tokens = table
+    server, encounter = live
+    agent = _join(qtbot, server, "autopilot", "let-me-run-it")
+    try:
+        server.set_autopilot(True, by="the DM")
+        far = repos.entities.create(
+            Entity(id=None, campaign_id=campaign_id, kind="npc", name="Far away")
+        )
+        before = len(repos.encounters.combatants(encounter.id))
+
+        with qtbot.waitSignal(agent.failed, timeout=5000) as blocker:
+            agent._send(MessageType.ENLIST, entity=far.id, x=99, y=99)
+
+        assert "off the map" in " ".join(str(a) for a in blocker.args).lower()
+        assert len(repos.encounters.combatants(encounter.id)) == before, (
+            "nothing was added"
+        )
+    finally:
+        agent.leave()
+
+
 def test_a_player_cannot_pass_the_turn(qtbot, live, table):
     repos = table[0]
     server, encounter = live

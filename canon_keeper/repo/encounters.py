@@ -134,6 +134,10 @@ class Encounter:
     #: because it belongs to the turn and not to the creature taking it.
     moved_squares: int = 0
     action_used: bool = False
+    #: What the action became. `action_used` says it is gone; these say what it
+    #: went on, which is what Extra Attack and Dash each need to know.
+    attacks_made: int = 0
+    dashed: bool = False
     created_at: float = 0.0
     updated_at: float = 0.0
     version: int = 1
@@ -163,6 +167,8 @@ class Encounter:
             running=bool(row["running"]),
             moved_squares=_column(row, "moved_squares", 0),
             action_used=bool(_column(row, "action_used", 0)),
+            attacks_made=_column(row, "attacks_made", 0),
+            dashed=bool(_column(row, "dashed", 0)),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
             version=row["version"],
@@ -362,10 +368,20 @@ class EncounterRepo:
         x: int | None = None,
         y: int | None = None,
     ) -> Combatant | None:
-        """Put a creature in the fight. Returns None if it is already in it."""
+        """Put a creature in the fight. Returns None if it is already in it.
+
+        A square that cannot be stood on is not written down. They go into the
+        fight without one instead, which is the app's ordinary "in the order,
+        not yet on the map" state and a token the DM can drag -- rather than
+        one standing outside the room, which nothing can then do anything with.
+        """
         existing = self._by_entity(encounter_id, entity_id)
         if existing is not None:
             return None
+        if x is not None and y is not None and not self.free_for(
+            encounter_id, int(x), int(y)
+        ):
+            x = y = None
 
         now = time.time()
         with self._conn:
@@ -405,6 +421,29 @@ class EncounterRepo:
             self._conn.execute("DELETE FROM combatant WHERE id = ?", (combatant_id,))
         self._touch(combatant.encounter_id)
 
+    def free_for(
+        self, encounter_id: int, x: int, y: int, ignoring: int | None = None
+    ) -> bool:
+        """Whether a creature could stand on that square at all.
+
+        Three facts about the map, not three rules: a square off the edge does
+        not exist, and one holding a body or a rock cannot be shared. Nothing
+        waives any of them.
+
+        Written once here because there is more than one way onto the map --
+        walking, dragging, and being put into the fight already standing
+        somewhere -- and the last of those went in without asking. A goblin
+        enlisted onto a square the map does not have made the whole fight
+        unplayable: every legal move it tried came back "off the map", because
+        the square it was measuring from was the one outside the room.
+        """
+        encounter = self.get(encounter_id)
+        if encounter is None or not encounter.holds(x, y):
+            return False
+        if self._occupant(encounter_id, x, y, ignoring=ignoring) is not None:
+            return False
+        return (x, y) not in self.obstacles(encounter_id)
+
     def place(self, combatant_id: int, x: int | None, y: int | None) -> bool:
         """Move a token, or take it off the map with ``None, None``.
 
@@ -424,11 +463,7 @@ class EncounterRepo:
             x = y = None
         else:
             x, y = int(x), int(y)
-            if not encounter.holds(x, y):
-                return False
-            if self._occupant(encounter.id, x, y, ignoring=combatant_id) is not None:
-                return False
-            if (x, y) in self.obstacles(encounter.id):
+            if not self.free_for(encounter.id, x, y, ignoring=combatant_id):
                 return False
 
         with self._conn:
@@ -554,7 +589,12 @@ class EncounterRepo:
     #: Cleared every time the turn passes. Written out once here rather than at
     #: each of the four places the turn can move, because a turn that inherits
     #: the last one's spent movement is a bug nobody would look for.
-    _FRESH_TURN = "moved_squares = 0, action_used = 0"
+    #: Everything the turn budget holds, cleared together. One string, because a
+    #: column added here and forgotten there is a counter that survives the turn
+    #: it belonged to.
+    _FRESH_TURN = (
+        "moved_squares = 0, action_used = 0, attacks_made = 0, dashed = 0"
+    )
 
     def begin(self, encounter_id: int) -> None:
         """Round one, and the highest initiative is up."""
@@ -577,6 +617,20 @@ class EncounterRepo:
 
     def use_action(self, encounter_id: int) -> None:
         self._write(encounter_id, "action_used = 1", ())
+
+    def count_attack(self, encounter_id: int) -> None:
+        """One more swing out of this turn's action.
+
+        Separate from :meth:`use_action` because the two answer different
+        questions: whether the action is gone, and how many attacks it has
+        produced. A level-five fighter gets two swings from one action, so the
+        first answer stops being enough.
+        """
+        self._write(encounter_id, "attacks_made = attacks_made + 1", ())
+
+    def dash(self, encounter_id: int) -> None:
+        """The action went on moving again rather than on a swing."""
+        self._write(encounter_id, "action_used = 1, dashed = 1", ())
 
     def advance(
         self,

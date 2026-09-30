@@ -102,6 +102,44 @@ class Responder:
         self._pending.append((member.label, text))
         self._restart_timer(session)
 
+    async def asked_to_translate(self, session, request: dict) -> None:
+        """The DM pointed at a line and asked for it in rules. Answer now.
+
+        Two of this class's rules do not apply here, and both for the same
+        reason -- a lull is a guess that the table wants an answer, and this is
+        somebody asking for one:
+
+        - **No pause.** There is nothing to wait for. The DM clicked.
+        - **Autopilot need not be on.** The evening this exists for is the one
+          where the DM is running their own table and wants a sentence worked
+          out. The host grants exactly one proposal for exactly that creature,
+          so "off" still means the agent does nothing of its own accord.
+
+        The one rule that does still apply is one answer at a time, and here it
+        is worth saying out loud rather than queueing: a click that produces
+        nothing for ten seconds reads as a broken button.
+        """
+        said = str(request.get("said", "")).strip()
+        who = str(request.get("who", "")) or "They"
+        if not said:
+            return
+        if self._answering:
+            await self._say_trouble(
+                f"Still writing the last answer -- ask again for {who} in a moment."
+            )
+            return
+
+        self._pending.append(
+            (
+                "(the DM)",
+                f'{who} said: "{said}". It is their turn. Use propose_turn to '
+                "write that as the move and attack they meant, and put it to "
+                "them. Say nothing at the table: the DM asked for the turn, not "
+                "for narration.",
+            )
+        )
+        await self._take_a_turn(session, asked=True)
+
     async def turn_came_round(self, session) -> None:
         """The fight moved. If it is a monster's turn, that is ours to take.
 
@@ -164,7 +202,7 @@ class Responder:
 
     # ---------------------------------------------------------------- speaking
 
-    async def _take_a_turn(self, session) -> None:
+    async def _take_a_turn(self, session, asked: bool = False) -> None:
         lines, self._pending = self._pending, []
         self._timer = None
         if not lines:
@@ -173,7 +211,12 @@ class Responder:
         # Re-checked here rather than only when the line arrived: the DM may
         # have taken the table back during the lull, and the whole promise of
         # that button is that it takes effect immediately.
-        if not session.table.autopilot:
+        #
+        # ``asked`` is the exception, and the only one: the DM asked for this
+        # particular answer, so autopilot is not what authorises it. The host
+        # still decides what may come of it -- it granted one proposal and
+        # nothing else.
+        if not asked and not session.table.autopilot:
             log.info("autopilot went off during the pause; saying nothing")
             return
 

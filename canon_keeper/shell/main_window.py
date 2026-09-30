@@ -25,7 +25,14 @@ from PySide6.QtWidgets import (
 
 from canon_keeper import __version__, campaigns, config
 from canon_keeper.content import ATTRIBUTION as SRD_ATTRIBUTION
-from canon_keeper.plugin import API_VERSION, AppContext
+from canon_keeper.plugin import (
+    API_VERSION,
+    REACH_EVERYWHERE,
+    REACH_PANEL,
+    REACH_WINDOW,
+    AppContext,
+)
+from canon_keeper.shell import keys
 from canon_keeper.repo.layouts import AUTOSAVE_NAME
 from canon_keeper.shell.attention import Attention
 from canon_keeper.templates import build
@@ -243,6 +250,10 @@ class MainWindow(QMainWindow):
         act_folder.triggered.connect(self._open_data_folder)
         file_menu.addAction(act_folder)
 
+        act_settings = QAction("&Settings...", self)
+        act_settings.triggered.connect(self._show_settings)
+        file_menu.addAction(act_settings)
+
         file_menu.addSeparator()
         act_quit = QAction("&Quit", self)
         act_quit.setShortcut(QKeySequence.StandardKey.Quit)
@@ -270,9 +281,14 @@ class MainWindow(QMainWindow):
         # the things that shape the window sit together. A panel with nothing
         # to declare gets no menu rather than an empty one.
         self._panel_menus: dict[str, object] = {}
+        #: Every key claim the window knows about, and the clashes among them.
+        #: Gathered as panels are built rather than asked for later, because a
+        #: panel that failed to load has no claims to gather.
+        self._key_claims: list[keys.Claim] = list(self._own_key_claims())
         for panel_id in self._docks:
             self._build_panel_menu(bar, panel_id)
         self._follow_panel_visibility()
+        self._note_key_clashes()
 
         # --- View -----------------------------------------------------------
         view_menu = bar.addMenu("&View")
@@ -330,6 +346,16 @@ class MainWindow(QMainWindow):
         entry = self._panels.get(panel_id)
         dock = self._docks.get(panel_id)
         widget = dock.widget() if dock is not None else None
+        default = entry.plugin.title if entry is not None else panel_id
+        # Gathered before the menu is, and whether or not there is a menu: a
+        # panel with no menu items may still handle keys of its own, and a key
+        # taken out from under it is exactly what the report is for.
+        self._key_claims.extend(
+            self._reserved_key_claims(
+                panel_id, widget, self._panel_title(panel_id, default)
+            )
+        )
+
         lister = getattr(widget, "panel_actions", None)
         if lister is None:
             return
@@ -341,13 +367,31 @@ class MainWindow(QMainWindow):
         if not wanted:
             return
 
-        default = entry.plugin.title if entry is not None else panel_id
         menu = bar.addMenu(self._panel_title(panel_id, default))
         menu.setObjectName(f"menu_{panel_id}")
         for item in wanted:
-            action = QAction(item.label, self)
+            # Parented to the *panel*, not to the window. That is what scopes the
+            # key: a Qt shortcut reaches as far as its parent widget, so an action
+            # owned by the main window fires from anywhere in the main window --
+            # including out of the chat box you were typing in.
+            owner = widget if self._reach_of(item) == REACH_PANEL else self
+            action = QAction(item.label, owner)
             if item.shortcut:
                 action.setShortcut(item.shortcut)
+                action.setShortcutContext(self._context_for(item, panel_id))
+                # Added to the widget as well as the menu, because a shortcut
+                # scoped to a widget is only listened for by a widget that holds
+                # the action. In a menu alone it would be drawn and never fire.
+                if owner is widget and widget is not None:
+                    widget.addAction(action)
+                self._key_claims.append(
+                    keys.Claim(
+                        key=item.shortcut,
+                        owner=self._panel_title(panel_id, default),
+                        reach=self._reach_of(item),
+                        what=item.label,
+                    )
+                )
             action.setEnabled(bool(item.enabled))
             action.triggered.connect(
                 lambda _checked=False, run=item.run, which=panel_id: self._run_panel_action(
@@ -356,6 +400,108 @@ class MainWindow(QMainWindow):
             )
             menu.addAction(action)
         self._panel_menus[panel_id] = menu
+
+    #: Qt's name for each reach. `WidgetWithChildren` rather than `Widget`
+    #: because a panel's focus is almost never on the panel itself -- it is in a
+    #: list, a line edit or the map inside it, and a key pressed there is still a
+    #: key pressed in that panel.
+    _REACHES = {
+        REACH_PANEL: Qt.ShortcutContext.WidgetWithChildrenShortcut,
+        REACH_WINDOW: Qt.ShortcutContext.WindowShortcut,
+        REACH_EVERYWHERE: Qt.ShortcutContext.ApplicationShortcut,
+    }
+
+    def _reach_of(self, item) -> str:
+        """What the panel asked for, or the default if it asked for nonsense.
+
+        A panel is other people's code. One that names a reach this shell has
+        never heard of gets the narrow one, because the failure that matters is a
+        key quietly reaching further than anybody intended.
+        """
+        wanted = getattr(item, "reach", REACH_PANEL)
+        return wanted if wanted in self._REACHES else REACH_PANEL
+
+    def _own_key_claims(self) -> list:
+        """The keys the shell itself owns. Panels declare their own.
+
+        Only the ones that belong to the window rather than to anything in it.
+        Everything a panel handles -- the map's Space, the transcript's
+        push-to-talk -- comes from that panel's ``reserved_keys()``, next to the
+        handler that reads it, because a list of somebody else's keys kept here
+        would go stale the first time they added one.
+        """
+        return [keys.Claim("Ctrl+Q", "Canon Keeper", REACH_WINDOW, "quit")]
+
+    def _reserved_key_claims(self, panel_id: str, widget, title: str) -> list:
+        """What this panel says it handles itself, if it says anything.
+
+        The same forgiveness the menu listing gets: a panel that raises while
+        answering costs its own entry in a report and not the window.
+        """
+        lister = getattr(widget, "reserved_keys", None)
+        if lister is None:
+            return []
+        try:
+            wanted = list(lister() or ())
+        except Exception:  # noqa: BLE001 - a bad panel is not fatal
+            self._log.exception("%s could not list its reserved keys", panel_id)
+            return []
+        return [
+            keys.Claim(
+                key=item.key,
+                owner=title,
+                reach=self._reach_of(item),
+                what=getattr(item, "what", ""),
+            )
+            for item in wanted
+            if getattr(item, "key", "")
+        ]
+
+    def key_clashes(self) -> list:
+        """Every clash between the keys this window's panels have claimed.
+
+        Public because it is the thing a settings page would show. Recomputed on
+        each call rather than cached: panels come and go, and a stale list of
+        clashes is worse than none.
+        """
+        return keys.clashes(self._key_claims)
+
+    def _show_settings(self) -> None:
+        """The window's settings. Built fresh each time it is opened.
+
+        Not held onto, because what it shows changes: panels open and close, and
+        a dialog remembering the keys of a panel that is no longer there would be
+        confidently wrong about the one thing it exists to be right about.
+        """
+        from canon_keeper.shell.settings_dialog import SettingsDialog
+
+        dialog = SettingsDialog(list(self._key_claims), self.key_clashes(), self)
+        dialog.exec()
+
+    def _note_key_clashes(self) -> None:
+        found = self.key_clashes()
+        if not found:
+            return
+        # In the log now, and in the log whether or not anybody ever builds the
+        # page that shows them: the point is that a key that will not work is
+        # discoverable before somebody presses it forty times.
+        self._log.warning("%d keyboard clash(es) among the panels:", len(found))
+        for clash in found:
+            self._log.warning("  %s", clash)
+
+    def _context_for(self, item, panel_id: str):
+        reach = self._reach_of(item)
+        if reach != REACH_PANEL:
+            # Worth a line in the log. A key that reaches past its own panel is a
+            # key every other panel has lost, and the question "why does F9 not
+            # work in here" has to be answerable.
+            self._log.info(
+                "%s claims %r %s", panel_id, item.shortcut, {
+                    REACH_WINDOW: "across the window",
+                    REACH_EVERYWHERE: "across the whole machine",
+                }[reach]
+            )
+        return self._REACHES[reach]
 
     def _follow_panel_visibility(self) -> None:
         """A closed panel takes its menu with it.

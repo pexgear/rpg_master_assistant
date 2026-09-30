@@ -52,6 +52,16 @@ class Bus(QObject):
     # dice and the hit points are the host's even when the DM is the one asking.
     turn_taken = Signal(dict)
 
+    # What became of it: (went through, why not). A turn is staged before it is
+    # sent, and a refusal has to reach whoever is holding it -- "too far for a
+    # battleaxe" is something to adjust, and throwing the staged turn away would
+    # mean rebuilding it from nothing to move one square less.
+    # (went through, why not, how many steps happened). The count is the part
+    # that matters for a turn made of steps: three squares and then a refused
+    # swing is three squares *spent*, and whoever is holding the turn has to stop
+    # holding the part that already happened or committing again walks it twice.
+    turn_settled = Signal(bool, str, int)
+
     # A player handing their own character to autopilot for this fight, or
     # taking it back: (combatant id, on). Yours to give without finding the DM.
     simulate_requested = Signal(int, bool)

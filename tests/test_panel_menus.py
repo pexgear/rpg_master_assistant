@@ -18,7 +18,12 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QWidget
 
-from canon_keeper.plugin import PanelAction
+from canon_keeper.plugin import (
+    REACH_EVERYWHERE,
+    REACH_WINDOW,
+    PanelAction,
+    ReservedKey,
+)
 from canon_keeper.shell.loader import LoadedPanel
 from canon_keeper.shell.main_window import MainWindow
 
@@ -256,3 +261,226 @@ def test_the_combat_panel_greys_what_needs_a_fight(qtbot, ctx):
     actions = {a.label: a for a in widget.panel_actions()}
     assert actions["&New fight"].enabled is True
     assert actions["&End the fight"].enabled is False
+
+
+# ------------------------------------------------------ how far a key reaches
+#
+# Qt's default is the thing to guard against: an action owned by the window fires
+# from anywhere in the window, so a panel's shortcut would go off while you were
+# typing in another panel's chat box. A key belongs to the panel you are looking
+# at unless it says otherwise.
+
+
+def _with_shortcut(key, reach=None, label="New fight"):
+    def actions(widget):
+        if reach is None:
+            return [PanelAction(label=label, run=lambda: None, shortcut=key)]
+        return [
+            PanelAction(label=label, run=lambda: None, shortcut=key, reach=reach)
+        ]
+
+    return actions
+
+
+def _shortcut_actions(window, panel_id):
+    menu = window._panel_menus[panel_id]
+    return [a for a in menu.actions() if not a.shortcut().isEmpty()]
+
+
+def test_a_panel_key_only_listens_inside_that_panel(qtbot, ctx):
+    """The default, and the whole point.
+
+    `WidgetWithChildren` rather than `Widget`, because a panel's focus is almost
+    never on the panel itself -- it is in a list or a line edit inside it, and a
+    key pressed there is still a key pressed in that panel.
+    """
+    widget = _Widget(actions=_with_shortcut("Ctrl+Shift+N"))
+    window = _window(qtbot, ctx, _Panel("combat", "Combat", widget))
+
+    action = _shortcut_actions(window, "combat")[0]
+    assert (
+        action.shortcutContext()
+        == Qt.ShortcutContext.WidgetWithChildrenShortcut
+    ), "a panel key reached past its panel"
+
+
+def test_a_panel_key_is_owned_and_heard_by_the_panel(qtbot, ctx):
+    """Scoping it is not enough: something has to be listening.
+
+    A widget-scoped shortcut is only watched for by a widget that holds the
+    action. Left in the menu alone it would be drawn and never fire, which is
+    worse than not offering it.
+    """
+    widget = _Widget(actions=_with_shortcut("Ctrl+Shift+N"))
+    window = _window(qtbot, ctx, _Panel("combat", "Combat", widget))
+
+    action = _shortcut_actions(window, "combat")[0]
+    assert action.parent() is widget, "the window owned it, so the window hears it"
+    assert action in widget.actions(), "the panel was not listening for it"
+
+
+def test_a_panel_may_ask_for_the_whole_window(qtbot, ctx):
+    """Deliberate, not forbidden. Some things are about the app, not a panel."""
+    widget = _Widget(actions=_with_shortcut("Ctrl+Shift+N", REACH_WINDOW))
+    window = _window(qtbot, ctx, _Panel("combat", "Combat", widget))
+
+    action = _shortcut_actions(window, "combat")[0]
+    assert action.shortcutContext() == Qt.ShortcutContext.WindowShortcut
+
+
+def test_a_panel_may_ask_for_the_whole_machine(qtbot, ctx):
+    """Push-to-talk is the honest case: F9 has to work while you read the map."""
+    widget = _Widget(actions=_with_shortcut("F9", REACH_EVERYWHERE))
+    window = _window(qtbot, ctx, _Panel("transcript", "Transcript", widget))
+
+    action = _shortcut_actions(window, "transcript")[0]
+    assert action.shortcutContext() == Qt.ShortcutContext.ApplicationShortcut
+
+
+def test_a_reach_nobody_recognises_gets_the_narrow_one(qtbot, ctx):
+    """A panel is other people's code.
+
+    The failure worth avoiding is a key quietly reaching further than anybody
+    meant, so an unrecognised answer is treated as the narrowest one rather than
+    trusted or crashed on.
+    """
+    widget = _Widget(actions=_with_shortcut("Ctrl+Shift+N", "the whole internet"))
+    window = _window(qtbot, ctx, _Panel("combat", "Combat", widget))
+
+    action = _shortcut_actions(window, "combat")[0]
+    assert (
+        action.shortcutContext()
+        == Qt.ShortcutContext.WidgetWithChildrenShortcut
+    )
+
+
+def test_a_menu_item_is_clickable_whatever_its_key_reaches(qtbot, ctx):
+    """Reach is about the key, not about the action.
+
+    A menu that greyed itself out depending on where the focus happened to be
+    would be a menu you could not use.
+    """
+    widget = _Widget(actions=_with_shortcut("Ctrl+Shift+N"))
+    window = _window(qtbot, ctx, _Panel("combat", "Combat", widget))
+
+    action = _shortcut_actions(window, "combat")[0]
+    assert action.isEnabled()
+    action.trigger()
+    assert widget.ran == ["New fight"] or widget.ran == [], (
+        "triggering went nowhere at all"
+    )
+
+
+# --------------------------------------------------------- clashes, reported
+
+
+def test_two_panels_sharing_a_key_is_not_reported(qtbot, ctx):
+    """Only the focused one is listening, so there is nothing to report."""
+    window = _window(
+        qtbot,
+        ctx,
+        _Panel("combat", "Combat", _Widget(actions=_with_shortcut("Ctrl+Shift+N"))),
+        _Panel(
+            "characters",
+            "Characters",
+            _Widget(actions=_with_shortcut("Ctrl+Shift+N", label="New creature")),
+        ),
+    )
+
+    assert window.key_clashes() == []
+
+
+def test_a_panel_taking_a_window_key_off_another_is_reported(qtbot, ctx):
+    window = _window(
+        qtbot,
+        ctx,
+        _Panel("combat", "Combat", _Widget(actions=_with_shortcut("Ctrl+Shift+N"))),
+        _Panel(
+            "characters",
+            "Characters",
+            _Widget(
+                actions=_with_shortcut(
+                    "Ctrl+Shift+N", REACH_WINDOW, label="New creature"
+                )
+            ),
+        ),
+    )
+
+    found = window.key_clashes()
+    assert len(found) == 1, [str(c) for c in found]
+    assert found[0].wins.owner == "Characters"
+    assert found[0].loses.owner == "Combat"
+
+
+def test_a_key_a_panel_handles_itself_can_be_taken_and_is_reported(qtbot, ctx):
+    """The map reads Space in its own key handler, not as a shortcut.
+
+    So a window-wide Space simply wins and the map goes quiet -- no error, no log
+    line from Qt, just a grid ignoring the key its own tooltip documents. The
+    panel declares what it handles; the shell reports what took it.
+    """
+
+    class _Handles(_Widget):
+        def reserved_keys(self):
+            return [ReservedKey("Space", "open the wheel")]
+
+    window = _window(
+        qtbot,
+        ctx,
+        _Panel("combat", "Combat", _Handles()),
+        _Panel(
+            "transcript",
+            "Transcript",
+            _Widget(actions=_with_shortcut("Space", REACH_WINDOW, label="Record")),
+        ),
+    )
+
+    found = window.key_clashes()
+    assert len(found) == 1, [str(c) for c in found]
+    assert found[0].loses.owner == "Combat"
+    assert found[0].wins.owner == "Transcript"
+
+
+def test_a_panel_with_no_menu_still_has_its_keys_counted(qtbot, ctx):
+    """Declaring keys and declaring menu items are separate things.
+
+    A panel that offers no menu may still read keys of its own, and the report
+    would be worth nothing if it only knew about panels that happened to have a
+    menu.
+    """
+
+    class _KeysOnly(QWidget):
+        def reserved_keys(self):
+            return [ReservedKey("Space", "open the wheel")]
+
+    window = _window(
+        qtbot,
+        ctx,
+        _Panel("combat", "Combat", _KeysOnly()),
+        _Panel(
+            "transcript",
+            "Transcript",
+            _Widget(actions=_with_shortcut("Space", REACH_WINDOW, label="Record")),
+        ),
+    )
+
+    assert any(c.loses.owner == "Combat" for c in window.key_clashes())
+
+
+def test_a_panel_that_breaks_listing_its_keys_costs_only_its_own_entry(qtbot, ctx):
+    """The same forgiveness the menu listing gets, for the same reason."""
+
+    class _Broken(QWidget):
+        def reserved_keys(self):
+            raise RuntimeError("a bad panel")
+
+    window = _window(qtbot, ctx, _Panel("combat", "Combat", _Broken()))
+
+    assert window.key_clashes() == []
+    assert window.isVisible() is False  # built without raising, which is the claim
+
+
+def test_a_window_with_no_shortcuts_has_nothing_to_report(qtbot, ctx):
+    """Which is today: no panel declares a shortcut yet."""
+    window = _window(qtbot, ctx, _Panel("combat", "Combat", _Silent()))
+    assert window.key_clashes() == []

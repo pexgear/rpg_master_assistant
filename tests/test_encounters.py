@@ -122,6 +122,41 @@ def test_two_creatures_cannot_share_a_square(fight):
     assert repos.encounters.place(first.id, 3, 3)
 
 
+def test_joining_a_fight_on_a_square_obeys_the_same_three_facts(fight):
+    """Arriving already standing somewhere is still standing somewhere.
+
+    ``place`` has refused an impossible square since there was a grid, and
+    ``add`` wrote whatever it was given straight to the database -- so the one
+    door that puts a creature on the map without moving it there was the one
+    door with no check. A goblin enlisted onto a square the map does not have
+    makes the fight unplayable rather than merely odd: every legal move it
+    tries comes back "off the map", because the square it measures from is the
+    one outside the room.
+    """
+    repos, campaign_id, encounter = fight
+    standing = repos.encounters.add(
+        encounter.id, _creature(repos, campaign_id, "Standing").id, x=3, y=3
+    )
+    repos.encounters.toggle_obstacle(encounter.id, 2, 2)
+
+    outside = repos.encounters.add(
+        encounter.id, _creature(repos, campaign_id, "Outside").id, x=50, y=50
+    )
+    crowding = repos.encounters.add(
+        encounter.id, _creature(repos, campaign_id, "Crowding").id, x=3, y=3
+    )
+    in_the_rock = repos.encounters.add(
+        encounter.id, _creature(repos, campaign_id, "Rock").id, x=2, y=2
+    )
+
+    assert standing.on_map, "a square that exists is still written down"
+    # In the order, and the DM can drag them on. Not standing outside the room.
+    assert not outside.on_map
+    assert not crowding.on_map
+    assert not in_the_rock.on_map
+    assert repos.encounters.at(encounter.id, 3, 3).id == standing.id
+
+
 def test_one_creature_joins_a_fight_once(fight):
     repos, campaign_id, encounter = fight
     goblin = _creature(repos, campaign_id, "Goblin")

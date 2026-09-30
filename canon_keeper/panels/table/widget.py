@@ -7,6 +7,7 @@ so the DM's own messages travel the same path a player's do.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import NamedTuple
 
 from PySide6.QtCore import (
     QObject,
@@ -39,10 +40,12 @@ from canon_keeper import agent_runner, campaigns, credentials, stand_ins
 from canon_keeper.audio.dictation import Dictation
 from canon_keeper.net import discovery, funnel
 from canon_keeper.net.client import SessionClient
+from canon_keeper_protocol import turns
 from canon_keeper_protocol.messages import Member, Role, SystemKind
 from canon_keeper.net.server import DEFAULT_PORT, SessionServer
 from canon_keeper.panels.table.agent_settings import (
     MODEL_SETTING,
+    TRANSLATE_SETTING,
     AgentSettingsDialog,
 )
 from canon_keeper.panels.table.approvals import ApprovalsDialog
@@ -91,6 +94,24 @@ ROLE_LABELS = {
 }
 
 
+class _Line(NamedTuple):
+    """One line in the log, kept whether or not it is on screen.
+
+    Named rather than a bare tuple because it has already grown once, and the
+    growing is what breaks things: every reader unpacked three values
+    positionally, so adding a fourth broke five tests that had no interest in
+    it. A field nobody asked for is now invisible to them.
+    """
+
+    kind: str
+    text: str
+    when: float
+    #: The roster id of whoever said it, where a person said it. Kept because a
+    #: line is only worth offering to translate if the host can be told whose
+    #: it was -- and a *name* would be the wrong thing to tell it.
+    said_by: str = ""
+
+
 class TableWidget(QWidget):
     def __init__(self, ctx: AppContext) -> None:
         super().__init__()
@@ -107,6 +128,10 @@ class TableWidget(QWidget):
         #: before that would store a password we have no reason to believe.
         self._pending_credentials: tuple[str, str, str] | None = None
         self._funnel_url = ""
+        #: Whether a publish has been asked for and not yet taken down. Kept
+        #: apart from the address because the address only exists once
+        #: Tailscale has answered, and the funnel is up either way.
+        self._publishing = False
         #: Set while relaying a player's edit to the DM's own panels, so the
         #: refresh does not look like a change *by* the DM.
         self._relaying_player_edit = False
@@ -122,10 +147,17 @@ class TableWidget(QWidget):
         #: Who is composing right now, by label.
         self._busy: set[str] = set()
         #: Every line, shown or not, so the filter can be turned back on.
-        self._entries: list[tuple[str, str, float]] = []
+        self._entries: list[_Line] = []
+        #: The fight as the host last described it, or empty. Only used to ask
+        #: whether one is running and whose turn it is.
+        self._fight: dict = {}
         #: Rolls the DM has asked for, by the token in their link. Rebuilt
         #: whenever the log is, so a filtered-out line leaves no live link.
         self._roll_prompts: dict[int, object] = {}
+        #: Lines the DM has been offered a translation of, by the token in their
+        #: mark: ``token -> (member id, what they said)``. Rebuilt with the log,
+        #: for the same reason the rolls are.
+        self._translations: dict[int, tuple[str, str]] = {}
         #: The die currently open, so the host's answer can land in it.
         self._roll_dialog: RollDialog | None = None
         #: SRD rules, for working out what a character adds to a roll. Built on
@@ -235,6 +267,9 @@ class TableWidget(QWidget):
         if ctx.shared is not None:
             ctx.shared.changed.connect(self._on_shared_changed)
         self._refresh_colours()
+        # Before the first `_update_state`, so a machine left published shows up
+        # as such on the screen the DM opens rather than after their first click.
+        self._mind_a_leftover_funnel()
         self._update_state()
 
         # Launched by joining a session: connect straight away rather than
@@ -778,6 +813,11 @@ class TableWidget(QWidget):
         the size of a fingernail. The chat is where people are looking, and
         missing your turn is the one thing this app can actually prevent.
         """
+        # Kept whether or not it is anybody's turn here, because the DM's copy
+        # of the log needs to know a fight is running at all -- the offer to
+        # translate a line only exists during one.
+        self._fight = fight if isinstance(fight, dict) else {}
+
         mine = self._own_character()
         if not fight or mine is None:
             self._up_now = None
@@ -857,14 +897,37 @@ class TableWidget(QWidget):
                 )
             return
 
-        problem = self._referee().take_turn(
-            combatant,
+        referee = self._referee()
+        steps = turns.normalise(
+            turn.get("steps"),
             move=turn.get("move"),
             target=turn.get("target"),
             weapon=str(turn.get("weapon", "")),
         )
+        # A turn for somebody else's character is an offer, not an act. The DM
+        # staging it was their consent; the player answers once and an accepted
+        # turn is carried out without coming back to the DM, because coming back
+        # would be asking the same person the same question twice.
+        #
+        # The referee decides, not this panel: which login plays a character is
+        # `_who_plays`'s to settle, and a second opinion worked out here is how
+        # the two halves of that fact drift apart.
+        done = 0
+        if referee.is_played_here(combatant):
+            problem = referee.offer_turn(combatant, steps=steps)
+            if not problem:
+                self._ctx.bus.status_message.emit("Put to them to accept.")
+                # An offer is the whole turn or none of it: nothing has been
+                # spent, and it is now theirs to answer.
+                done = len(steps)
+        else:
+            problem, done = referee.take_turn_steps(combatant, steps)
         if problem:
             self._ctx.bus.status_message.emit(problem)
+        # Said either way, because whoever staged it is holding it until they
+        # hear. `done` is how much of it has already been paid for, so what is
+        # still staged is only the part that has not happened.
+        self._ctx.bus.turn_settled.emit(not problem, problem, done)
 
     def _on_turn_requested(self, action: str) -> None:
         """The DM's Combat panel passing the turn.
@@ -913,10 +976,48 @@ class TableWidget(QWidget):
         if self._server is None or not self._server.is_running:
             return
         self._append_system("Asking Tailscale to publish this session...")
+        # Both set before the command runs, not after it answers: from here on
+        # there may be a funnel to take down, whatever comes back -- including
+        # on some later run of the app, which is what the marker is for.
+        self._publishing = True
+        funnel.remember(self._server.port)
         self._run_funnel(funnel.start, self._server.port, self._on_funnel_started)
+
+    @property
+    def _anything_published(self) -> bool:
+        """Whether there may be a funnel of ours on the public internet.
+
+        The *address* is not the test. ``funnel --bg`` takes effect in the
+        daemon, so a publish that never reported back is published all the
+        same. Two callers -- going offline, and closing the app -- and each had
+        its own copy of this condition, both wrong in the same way.
+        """
+        return bool(self._funnel_url) or self._publishing
+
+    def _mind_a_leftover_funnel(self) -> None:
+        """Say when a previous run left the machine published.
+
+        Not taken down on sight. A public address is the DM's to keep or drop,
+        and an app that silently undid something it found would be deciding
+        that for them -- so this makes it visible and makes the button that
+        ends a session end this too.
+        """
+        if self._ctx.role != Role.DM.value:
+            return
+        port = funnel.left_over()
+        if port is None:
+            return
+        self._publishing = True
+        self._append_system(
+            f"This machine may still be published to the internet from last "
+            f"time, pointing at port {port}. Nothing is hosting it now. "
+            "Press Go offline to take it down."
+        )
 
     def _stop_funnel(self) -> None:
         self._funnel_url = ""
+        self._publishing = False
+        funnel.forget()
         self._proposals: list[dict] = []
         self._approvals_dialog = None
         self._run_funnel(funnel.stop, None, self._on_funnel_stopped)
@@ -930,6 +1031,12 @@ class TableWidget(QWidget):
 
     def _on_funnel_started(self, result) -> None:
         if not result.ok:
+            if not result.attempted:
+                # It failed before the command ran -- no Tailscale, or Funnel
+                # not switched on -- so nothing is out there and the note
+                # saying otherwise would be a false alarm on the next launch.
+                self._publishing = False
+                funnel.forget()
             self._report_funnel_problem(result)
             self._update_state()
             return
@@ -1095,7 +1202,7 @@ class TableWidget(QWidget):
 
     def _leave(self) -> None:
         self._client.leave()
-        if self._funnel_url:
+        if self._anything_published:
             # Closing the session must also take it off the public internet,
             # or the tunnel outlives the thing it was pointing at.
             self._stop_funnel()
@@ -1318,7 +1425,7 @@ class TableWidget(QWidget):
             # is the difference between directing and being ignored.
             self._append(member.role, f"{member.label} (to autopilot): {text}")
             return
-        self._append(member.role, f"{member.label}: {text}")
+        self._append(member.role, f"{member.label}: {text}", said_by=member.id)
 
     def _on_rolled(self, member: Member, payload: dict) -> None:
         self._append("roll", f"{member.label} rolled {payload.get('description', '')}")
@@ -1360,9 +1467,17 @@ class TableWidget(QWidget):
         if messages:
             self._append("system", "--- you are here ---")
 
-    def _append(self, kind: str, text: str, when: float | None = None) -> None:
+    def _append(
+        self,
+        kind: str,
+        text: str,
+        when: float | None = None,
+        said_by: str = "",
+    ) -> None:
         """Record a line, and show it if it is not being filtered out."""
-        self._entries.append((kind, text, when or datetime.now().timestamp()))
+        self._entries.append(
+            _Line(kind, text, when or datetime.now().timestamp(), said_by)
+        )
         if kind == "error":
             # Some errors answer a button the reader just pressed, and the log
             # is the wrong place to learn that: it is filtered, and they are
@@ -1375,7 +1490,7 @@ class TableWidget(QWidget):
                 # unannounced.
                 self._flag_log()
             return
-        self._draw(kind, text, when)
+        self._draw(kind, text, when, said_by)
 
     def _flag_log(self) -> None:
         colour = self._colours.get("error", QColor("#b00020")).name()
@@ -1404,11 +1519,18 @@ class TableWidget(QWidget):
         """Rebuild the whole log, which is what makes the filter reversible."""
         self._log.clear()
         self._roll_prompts.clear()
-        for kind, text, when in self._entries:
-            if not self._is_hidden(kind):
-                self._draw(kind, text, when)
+        self._translations.clear()
+        for line in self._entries:
+            if not self._is_hidden(line.kind):
+                self._draw(line.kind, line.text, line.when, line.said_by)
 
-    def _draw(self, kind: str, text: str, when: float | None = None) -> None:
+    def _draw(
+        self,
+        kind: str,
+        text: str,
+        when: float | None = None,
+        said_by: str = "",
+    ) -> None:
         cursor = self._log.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
 
@@ -1424,6 +1546,7 @@ class TableWidget(QWidget):
         moment = datetime.fromtimestamp(when) if when else datetime.now()
         cursor.insertText(f"{moment:%H:%M}  ", stamp)
         self._insert_body(cursor, kind, text, body)
+        self._offer_translation(cursor, kind, text, said_by, body)
         self._log.verticalScrollBar().setValue(self._log.verticalScrollBar().maximum())
 
     # ---------------------------------------------------------- rolls in chat
@@ -1478,6 +1601,107 @@ class TableWidget(QWidget):
         link.setToolTip("Click to roll this")
         return link
 
+    # ------------------------------------------------- a line, as a turn
+    #
+    # "I get behind the orc and hit it with my axe" is a turn, and somebody has
+    # to work out which square that is. The agent already can -- `propose_turn`
+    # is the whole of it -- but only ever decided to on its own, after a pause,
+    # with autopilot on. This is the other way round: the DM reads the line,
+    # points at it, and asks. Nothing happens to the character either way until
+    # the player accepts, which is what makes an offer safe to hand out.
+
+    #: The mark itself. A glyph rather than an icon so it inherits the log's
+    #: font and colour and needs nothing shipped alongside it.
+    TRANSLATE_MARK = "  ⚔"
+
+    def _offer_translation(
+        self, cursor, kind: str, text: str, said_by: str, body
+    ) -> None:
+        """Put a mark beside a line that could be taken as somebody's turn."""
+        if not self._may_translate(kind, said_by):
+            return
+        token = len(self._translations) + 1
+        self._translations[token] = (said_by, self._spoken_part(text))
+        mark = QTextCharFormat(body)
+        mark.setAnchor(True)
+        mark.setAnchorHref(f"translate:{token}")
+        mark.setForeground(self._colours.get("turn", self._colours["system"]))
+        mark.setToolTip("Ask the agent to write this as their turn")
+        cursor.insertText(self.TRANSLATE_MARK, mark)
+
+    def _may_translate(self, kind: str, said_by: str) -> bool:
+        """Whether this line, on this screen, is worth offering.
+
+        Four things have to be true, and the fourth is the one worth saying:
+        the speaker has to be the character whose turn it is. Offering it
+        beside everybody's line would mean most clicks came back refused, and a
+        mark that usually does not work is worse than no mark.
+
+        Matched on the name the host put in the roster against the name the
+        host put on the entity. Both come from the host and a mismatch only
+        ever costs a mark that is not drawn -- the click itself is checked
+        against the *account* that plays the character, which is the half of it
+        a client cannot see.
+        """
+        if kind != Role.PLAYER.value or not said_by:
+            return False
+        if not self._translates_turns():
+            return False
+        me = self._client.me
+        if me is None or me.role != Role.DM.value:
+            return False
+        acting = self._whose_turn()
+        if not acting:
+            return False
+        speaker = next(
+            (m for m in self._client.members if m.id == said_by), None
+        )
+        return speaker is not None and bool(speaker.character) and (
+            speaker.character == acting
+        )
+
+    def _translates_turns(self) -> bool:
+        return self._ctx.repos.settings.get(TRANSLATE_SETTING, "") == "on"
+
+    def _whose_turn(self) -> str:
+        """The name of the creature whose turn it is, or empty if none is."""
+        turn = self._fight.get("turn")
+        if not self._fight.get("running") or turn is None:
+            return ""
+        acting = next(
+            (
+                c
+                for c in self._fight.get("combatants") or []
+                if c.get("id") == turn
+            ),
+            None,
+        )
+        if acting is None or self._ctx.shared is None:
+            return ""
+        entity = self._ctx.shared.get(acting.get("entity"))
+        return str((entity or {}).get("name", ""))
+
+    @staticmethod
+    def _spoken_part(text: str) -> str:
+        """The line without the "Brok: " the log puts in front of it.
+
+        Sent rather than the whole thing because the agent is being asked what
+        somebody meant, and a name it already knows, glued to the front by the
+        panel that displays it, is not part of what they said.
+        """
+        _, _, rest = text.partition(": ")
+        return (rest or text).strip()
+
+    def _on_translation_asked(self, token: int) -> None:
+        said_by, text = self._translations.get(token, ("", ""))
+        if not said_by or not text:
+            return
+        if self._client.send_translate(said_by, text):
+            # Said, because the answer arrives as a turn on somebody else's
+            # screen. Without this the DM's own click has no visible effect at
+            # all on the one screen they are looking at.
+            self._append("system", "Asked the agent to write that as a turn.")
+
     def _on_shared_changed(self) -> None:
         """Gaining -- or losing -- a character changes what the log offers.
 
@@ -1498,11 +1722,15 @@ class TableWidget(QWidget):
         return self._ctx.shared.own_character()
 
     def _on_anchor(self, url: QUrl) -> None:
-        if url.scheme() != "roll":
+        scheme = url.scheme()
+        if scheme not in ("roll", "translate"):
             return
         try:
             token = int(url.path() or url.toString().split(":", 1)[1])
         except (TypeError, ValueError):
+            return
+        if scheme == "translate":
+            self._on_translation_asked(token)
             return
         prompt = self._roll_prompts.get(token)
         if prompt is not None:
@@ -1575,7 +1803,11 @@ class TableWidget(QWidget):
         self._invite_button.setEnabled(hosting)
         self._join_button.setVisible(not is_dm)
         self._join_button.setEnabled(not connected and not hosting)
-        self._leave_button.setEnabled(connected or hosting)
+        # A funnel left over from a previous run counts: it is the one thing on
+        # this screen that is genuinely still on, and Go offline is what ends
+        # it. Without this the button is greyed out beside a line saying the
+        # machine is published, which is the app arguing with itself.
+        self._leave_button.setEnabled(connected or hosting or self._anything_published)
         # Held while a turn is waiting on you: there are three ways to answer
         # it and carrying on chatting is not one of them.
         self._entry.setEnabled(connected and not self._holding_for_an_answer())
@@ -1594,6 +1826,11 @@ class TableWidget(QWidget):
         elif connected:
             me = self._client.me
             self._status.setText(f"Connected as {me.name}." if me else "Connected.")
+        elif self._anything_published:
+            self._status.setText(
+                "Not hosting, but this machine may still be published to the "
+                "internet from a previous session. Go offline takes it down."
+            )
         else:
             self._status.setText("Not connected.")
 
@@ -1608,9 +1845,16 @@ class TableWidget(QWidget):
         self._dictation_timer.stop()
         self._dictation.cancel()
         self._client.leave()
-        if self._funnel_url:
+        # Asked, not confirmed. `tailscale funnel --bg` takes effect in the
+        # daemon rather than in this process, so a publish still in flight when
+        # the app closes leaves the session on the public internet with nothing
+        # here holding its address -- and the next launch, which starts with an
+        # empty one, has no idea it is there.
+        if self._anything_published:
             funnel.stop()
+            funnel.forget()
             self._funnel_url = ""
+            self._publishing = False
         if self._server is not None:
             self._server.stop()
 

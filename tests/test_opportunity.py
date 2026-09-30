@@ -135,6 +135,29 @@ def test_walking_away_is_swung_at(fight, monkeypatch):
     assert _hp(repos, hero) < before, "the goblin watched them walk away"
 
 
+def test_a_walk_that_never_happens_is_not_swung_at(fight, monkeypatch):
+    """You are swung at for leaving. Being refused is not leaving.
+
+    An occupied destination is checked last, by ``place``, and deliberately so:
+    it is left out of the route to keep the refusal specific. But the swings are
+    provoked before that, so a creature that asked for an impossible square and
+    was told no had already been swung at for a walk it never took -- and at low
+    hit points that kills it where it stands.
+    """
+    monkeypatch.setattr(server_module, "roll", _Rolls(19, 5))
+    server, repos, _encounter, tokens, hero, _goblin, _archer = fight
+    # Standing exactly where test_walking_away_is_swung_at walks to, so the only
+    # difference between that test and this one is whether the square is free.
+    assert repos.encounters.place(tokens["archer"].id, 0, 4)
+    before = _hp(repos, hero)
+
+    assert server._do_move(tokens["hero"].id, 0, 4, spending=True) is False
+
+    assert _hp(repos, hero) == before, "swung at for standing still"
+    moved = repos.encounters.combatant(tokens["hero"].id)
+    assert (moved.x, moved.y) == (0, 0)
+
+
 def test_staying_in_reach_is_not(fight, monkeypatch):
     """Shuffling round somebody is not escaping them."""
     monkeypatch.setattr(server_module, "roll", _Rolls(19, 5))
@@ -329,6 +352,75 @@ def test_the_walk_shown_is_only_as_far_as_they_got(fight, monkeypatch):
 
     assert len(walks) == 2, "the full walk was described and never corrected"
     assert [tuple(square) for square in walks[-1]["path"]] == [(0, 0), (0, 1), (0, 2)]
+
+
+def test_falling_is_not_reported_as_a_square_being_taken(fight, monkeypatch):
+    """The square was empty. They were cut down on the way to it.
+
+    Every door that reports a failed walk reported both its causes in the same
+    words -- "taken, or something is in the way" -- so the DM's own status bar
+    contradicted the chat line directly above it, which said what had actually
+    happened. Nothing to add is nothing said.
+    """
+    server, repos, _encounter, tokens, hero, _goblin, _archer = fight
+    _about_to_fall(repos, hero, monkeypatch)
+
+    problem = server.take_turn(tokens["hero"].id, move=[0, 4])
+
+    assert problem == "", f"the DM was told {problem!r} about an empty square"
+    assert repos.encounters.combatant(tokens["hero"].id).down is True
+
+
+def test_a_square_really_taken_still_says_so(fight, monkeypatch):
+    """The other half of it: the ordinary refusal has not gone quiet."""
+    server, repos, _encounter, tokens, hero, _goblin, archer = fight
+    monkeypatch.setattr(server_module, "roll", _Rolls(1, 1))
+    # The archer is standing at -1,0 and holds no ground, so walking onto it
+    # is refused by the square being occupied rather than by anybody's reach.
+    problem = server.take_turn(tokens["hero"].id, move=[-1, 0])
+
+    assert "taken" in problem
+    assert repos.encounters.combatant(tokens["hero"].id).down is False
+
+
+def test_cut_down_walking_over_you_do_not_get_the_swing_in(fight, monkeypatch):
+    """A proposal is a move and an action, carried out in that order.
+
+    Nothing between the two halves asked whether the creature was still on its
+    feet, and the one-action rule could not catch it: going down passes the
+    turn, and an action is only ever spent by whoever's turn it is. So a hero
+    dropped crossing the room still landed a blow from the floor.
+    """
+    from canon_keeper.net.projection import Viewer
+    from canon_keeper.net.server import _Session
+    from canon_keeper_protocol.messages import Member
+
+    server, repos, _encounter, tokens, hero, goblin, archer = fight
+    # Next to the square they fall on *and* next to the one they were walking
+    # to, so what is being tested is whether they are conscious rather than
+    # whether they are close enough.
+    assert repos.encounters.place(tokens["archer"].id, 1, 3)
+    _about_to_fall(repos, hero, monkeypatch)
+    before = _hp(repos, archer)
+    session = _Session(
+        member=Member(id="", name="Marco", role="player"),
+        account_id=None,
+        viewer=Viewer.dungeon_master(),
+    )
+
+    server._carry_out(
+        {
+            "combatant": tokens["hero"].id,
+            "who": "Brok",
+            "move": [0, 4],
+            "target": tokens["archer"].id,
+            "weapon": "battleaxe",
+        },
+        session,
+    )
+
+    assert repos.encounters.combatant(tokens["hero"].id).down is True
+    assert _hp(repos, archer) == before, "an unconscious hero swung an axe"
 
 
 def test_the_unconscious_do_not_swing_at_passers_by(fight, monkeypatch):

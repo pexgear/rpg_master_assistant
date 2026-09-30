@@ -42,15 +42,18 @@ from canon_keeper.panels.encounter.grid import (
     COMBATANT_MIME,
     Choice,
     GridMap,
+    Preview,
     Token,
+    TurnPlan,
 )
+from canon_keeper.panels.encounter.view3d import MapView
 from canon_keeper import entity_actions
-from canon_keeper.plugin import AppContext, PanelAction
+from canon_keeper.plugin import AppContext, PanelAction, ReservedKey
 from canon_keeper.repo.encounters import Encounter
 from canon_keeper.repo.entities import KIND_NPC, KIND_PC
 from canon_keeper import campaigns
 from canon_keeper.rules import death
-from canon_keeper_protocol import robots
+from canon_keeper_protocol import robots, turns
 
 
 def _header(name: str, palette) -> QListWidgetItem:
@@ -94,6 +97,11 @@ class EncounterWidget(QWidget):
         self._ctx = ctx
         self._encounter: Encounter | None = None
         self._combatants: list = []
+        #: The turn being lined up, as an ordered list of steps, and who it is
+        #: for. Runtime only, and never for more than one creature at a time --
+        #: see `_stage`.
+        self._staged_steps: list[dict] = []
+        self._staged_for: int | None = None
         self._teams: list = []
         self._entities: dict[int, object] = {}
         self._shared: set[int] = set()
@@ -109,6 +117,7 @@ class EncounterWidget(QWidget):
         self._build_ui()
 
         ctx.bus.encounter_changed.connect(self._refresh)
+        ctx.bus.turn_settled.connect(self._on_turn_settled)
         # Hit points and names live on entities, and both are on this screen.
         ctx.bus.entity_changed.connect(lambda _id: self._refresh())
         ctx.bus.entity_deleted.connect(lambda _id: self._refresh())
@@ -225,18 +234,65 @@ class EncounterWidget(QWidget):
         self._map.obstacle_toggled.connect(self._on_obstacle)
         self._map.menu_requested.connect(self._on_map_menu)
         self._map.radial_wanted.connect(self._offer_wheel)
-        self._map.planned.connect(self._carry_out)
-        splitter.addWidget(self._map)
+        self._map.planned.connect(self._stage)
+        self._map.commit_wanted.connect(self._commit_staged)
+        self._map.staging_cancelled.connect(self._clear_staged)
+        # Seen in 3D. The panel still talks only to `_map`, which holds the
+        # fight; the view is how it is drawn.
+        self._view = MapView(self._map)
+        splitter.addWidget(self._view)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([220, 520])
         outer.addWidget(splitter, 1)
+
+        # The staged turn, in words, with the two ways out of it. Hidden until
+        # there is something staged: a bar that is always there, usually empty,
+        # is furniture rather than information.
+        self._staged_bar = QWidget()
+        staged_row = QHBoxLayout(self._staged_bar)
+        staged_row.setContentsMargins(0, 0, 0, 0)
+        self._staged_text = QLabel("")
+        self._staged_text.setWordWrap(True)
+        staged_row.addWidget(self._staged_text, 1)
+        self._do_it = QPushButton("Do it")
+        self._do_it.setToolTip("Carry out the staged turn (Enter)")
+        self._do_it.clicked.connect(self._commit_staged)
+        staged_row.addWidget(self._do_it)
+        clear = QPushButton("Clear")
+        clear.setToolTip("Forget it and stage nothing (Esc)")
+        clear.clicked.connect(self._clear_staged)
+        staged_row.addWidget(clear)
+        self._staged_bar.setVisible(False)
+        outer.addWidget(self._staged_bar)
 
         self._hint = QLabel("")
         self._hint.setWordWrap(True)
         outer.addWidget(self._hint)
 
     # ---------------------------------------------------------------- reading
+
+    def reserved_keys(self) -> list[ReservedKey]:
+        """The keys the map reads itself, declared so they can be reported.
+
+        None of these is a shortcut: :meth:`GridMap.keyPressEvent` reads them
+        directly, which means nothing outside this panel knows they are taken. A
+        panel claiming Space window-wide would win it, and the map would go
+        quiet with no error anywhere -- so the shell is told, and says so.
+
+        Listed here rather than in the shell because they belong to the handler
+        a few hundred lines below, and a copy kept somewhere else goes stale the
+        first time a key is added.
+        """
+        return [
+            ReservedKey("Space", "open the wheel on whoever is selected"),
+            ReservedKey("Escape", "put the wheel away, or clear the staged turn"),
+            ReservedKey("Return", "carry out the staged turn"),
+            ReservedKey("+", "zoom in"),
+            ReservedKey("-", "zoom out"),
+            ReservedKey("0", "fit the map to the panel"),
+            ReservedKey("Arrow keys", "pan the map"),
+        ]
 
     def panel_actions(self) -> list[PanelAction]:
         """What this panel can do, for a menu of its own.
@@ -265,9 +321,10 @@ class EncounterWidget(QWidget):
             PanelAction("F&ight...", self._edit_fight, enabled=running),
             # The map's own view. In the menu as well as on the wheel because a
             # shortcut nobody can find is a shortcut nobody has.
-            PanelAction("Zoom &in", lambda: self._map.zoom_by(1), "Ctrl+="),
-            PanelAction("Zoom &out", lambda: self._map.zoom_by(-1), "Ctrl+-"),
-            PanelAction("&Whole map", self._map.fit, "Ctrl+0"),
+            PanelAction("Zoom &in", lambda: self._view.zoom_by(1), "Ctrl+="),
+            PanelAction("Zoom &out", lambda: self._view.zoom_by(-1), "Ctrl+-"),
+            PanelAction("&Whole map", self._view.fit, "Ctrl+0"),
+            PanelAction("From &above", self._view.from_above, "Ctrl+9"),
         ]
 
     def _refresh(self) -> None:
@@ -763,6 +820,16 @@ class EncounterWidget(QWidget):
         if target is None:
             return
 
+        # Staged, not sent, once a fight is running -- so a swing chosen here can
+        # have a walk added to it on the map before either happens. The dialog
+        # and the wheel are the same turn, and having one of them commit while
+        # the other waits would make which door you came through matter.
+        if self._encounter is not None and self._encounter.has_begun:
+            self._stage(
+                TurnPlan(combatant=acting.id, target=target, weapon=weapon)
+            )
+            return
+
         self._ctx.bus.turn_taken.emit(
             {"combatant": acting.id, "target": target, "weapon": weapon}
         )
@@ -817,22 +884,125 @@ class EncounterWidget(QWidget):
             "Escape puts the wheel away."
         )
 
-    def _carry_out(self, plan) -> None:
-        """A turn lined up on the map, on its way to the host.
+    # ------------------------------------------------------- staging a turn
+    #
+    # A turn is a move and an action, and until now the DM got neither as a
+    # thing: each wedge fired the moment it was picked, so "walk over there and
+    # swing" was two commitments with no way back from the first. A player has
+    # had the better deal all along -- they are shown the whole turn and accept
+    # it -- and the map was built for this: see `TurnPlan`, which says its own
+    # future is "a matter of holding it a little longer".
+    #
+    # So the DM stages, reads it, and commits. It is also what parity with the
+    # agent requires: autopilot could compose a move-and-attack through
+    # `take_turn` and the DM's own panel could not.
 
-        Sent the moment it is complete. The plan is a whole object rather than
-        two arguments precisely so that holding it -- previewing a turn before
-        committing to it -- is later a change to this method and nothing else.
+    def _stage(self, plan) -> None:
+        """Append what was just picked to the turn being lined up.
+
+        Appended, not merged. Picking two moves is a turn that walks, does
+        something, and walks on -- which is the whole point of a turn being a
+        sequence, and was impossible while a plan carried one move and one
+        attack in that order.
+
+        Staging for a different creature starts again: two half-turns for two
+        creatures is not a thing anybody meant to ask for.
         """
         if plan is None or plan.is_empty:
             return
-        turn: dict = {"combatant": plan.combatant}
+        if self._staged_for != plan.combatant:
+            self._staged_for = plan.combatant
+            self._staged_steps = []
         if plan.move is not None:
-            turn["move"] = list(plan.move)
+            self._staged_steps.append(turns.a_move(*plan.move))
         if plan.target is not None:
-            turn["target"] = plan.target
-            turn["weapon"] = plan.weapon
-        self._ctx.bus.turn_taken.emit(turn)
+            self._staged_steps.append(turns.a_swing(plan.target, plan.weapon))
+        self._show_staged()
+
+    def _clear_staged(self) -> None:
+        if not self._staged_steps:
+            return
+        self._staged_steps = []
+        self._staged_for = None
+        self._show_staged()
+
+    def _commit_staged(self) -> None:
+        """Send the staged turn to the host, which is the only thing that acts.
+
+        Held, not cleared. The host may refuse it -- too far, already acted, out
+        of reach -- and a refusal is nearly always something to *adjust*. Losing
+        the turn on refusal would mean rebuilding the whole thing to move one
+        square less. :meth:`_on_turn_settled` decides what is left of it.
+        """
+        if not self._staged_steps or self._staged_for is None:
+            return
+        self._ctx.bus.turn_taken.emit(
+            {"combatant": self._staged_for, "steps": list(self._staged_steps)}
+        )
+
+    def _on_turn_settled(self, went_through: bool, why_not: str, done: int) -> None:
+        """Clear what happened; keep what did not, and say why.
+
+        ``done`` is the part that has already been paid for. A turn that walked
+        three squares and was then refused its swing keeps the swing and drops
+        the walk -- pressing **Do it** again must not walk it a second time.
+        """
+        if done:
+            self._staged_steps = self._staged_steps[done:]
+        if went_through or not self._staged_steps:
+            self._staged_steps = []
+            self._staged_for = None
+            self._show_staged()
+            return
+
+        self._show_staged()
+        if why_not:
+            # In the bar rather than only the status line, because the bar is
+            # what they are about to press again.
+            self._staged_text.setText(f"{self._staged_text.text()}  — {why_not}")
+
+    def _show_staged(self) -> None:
+        """The bar says it in words; the map shows it in squares.
+
+        Both, because they answer different questions. "Move to 3,-1" is precise
+        and unreadable at a glance; a dotted line to a square is instant and says
+        nothing about which weapon.
+        """
+        if not self._staged_steps or self._staged_for is None:
+            self._staged_bar.setVisible(False)
+            self._map.set_preview(None)
+            return
+
+        actor = self._combatant(self._staged_for)
+        self._staged_text.setText(
+            turns.describe_steps(
+                self._staged_steps,
+                lambda combatant_id: self._name_of(self._combatant(combatant_id))
+                if self._combatant(combatant_id) is not None
+                else "",
+                who=self._name_of(actor) if actor is not None else "They",
+            )
+        )
+        self._staged_bar.setVisible(True)
+
+        # Where they end up, and the first thing they swing at. The map draws one
+        # destination and one sword, so a turn with several of each shows the
+        # last square it reaches -- the rest of the order is what the bar is for.
+        walks = [s for s in self._staged_steps if s["kind"] == turns.MOVE]
+        swings = [s for s in self._staged_steps if s["kind"] == turns.ATTACK]
+        hit = self._combatant(swings[0]["target"]) if swings else None
+        self._map.set_preview(
+            Preview(
+                token=self._staged_for,
+                to=(walks[-1]["x"], walks[-1]["y"]) if walks else None,
+                target=(hit.x, hit.y) if hit is not None and hit.on_map else None,
+            )
+        )
+
+    def _combatant(self, combatant_id):
+        return next(
+            (c for c in self._combatants if c.id == combatant_id), None
+        )
 
     def _weapons_of(self, combatant) -> list[str]:
         entity = self._entities.get(combatant.entity_id)

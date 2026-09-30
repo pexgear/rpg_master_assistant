@@ -37,6 +37,11 @@ WORKSPACES_URL = "https://platform.claude.com/settings/workspaces"
 #: and a long campaign are not obviously the same choice.
 MODEL_SETTING = "agent.model"
 
+#: Setting key for the translate offer. Off by default: it puts a small mark
+#: beside other people's lines in the log, and a feature that quietly decorates
+#: the chat of a DM who never asked for it is one they have to go and turn off.
+TRANSLATE_SETTING = "agent.translates_turns"
+
 #: What to offer, plainest first. The list is short on purpose -- this is a
 #: choice between "good" and "cheap", not a catalogue.
 MODELS = (
@@ -111,6 +116,19 @@ class AgentSettingsDialog(QDialog):
 
         layout.addLayout(form)
 
+        self._translate = QCheckBox("Offer to turn what a player says into a turn")
+        self._translate.setChecked(
+            ctx.repos.settings.get(TRANSLATE_SETTING, "") == "on"
+        )
+        self._translate.setToolTip(
+            "While a fight is running, a mark appears beside what the player "
+            "whose turn it is has said. Clicking it asks the agent to write "
+            "that as a move and an attack, and puts it to them to accept.\n\n"
+            "It costs a model call each time you click it, and nothing when "
+            "you do not. Autopilot does not have to be on."
+        )
+        layout.addWidget(self._translate)
+
         where = QLabel(self._where_it_goes())
         where.setWordWrap(True)
         where.setTextFormat(Qt.TextFormat.PlainText)
@@ -175,6 +193,10 @@ class AgentSettingsDialog(QDialog):
     def model(self) -> str:
         return self._model.currentData() or MODELS[0][0]
 
+    @property
+    def translates_turns(self) -> bool:
+        return self._translate.isChecked()
+
     # ------------------------------------------------------------------ actions
 
     def _on_forget(self) -> None:
@@ -200,6 +222,9 @@ class AgentSettingsDialog(QDialog):
                 return
 
         self._ctx.repos.settings.set(MODEL_SETTING, self.model)
+        self._ctx.repos.settings.set(
+            TRANSLATE_SETTING, "on" if self.translates_turns else "off"
+        )
         if key:
             agent_runner.remember_api_key(key)
         # Saved even when blank, so clearing it actually clears it.

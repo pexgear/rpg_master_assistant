@@ -239,6 +239,48 @@ class TurnPlan:
         return self.move is None and self.target is None
 
 
+def budget_marks(token: Token) -> list[tuple[QColor, bool]]:
+    """The pips under a token: which colour, and whether it is still there.
+
+    See :meth:`GridMap._draw_budget` for why only these, and only here.
+    """
+    marks: list[tuple[QColor, bool]] = []
+    if token.is_turn:
+        # Filled while it is still there, hollow once it is gone: a spent
+        # move should read as an outline of the thing you no longer have.
+        marks.append((_MOVE_LEFT, token.squares_left > 0))
+        marks.append((_ACTION_LEFT, not token.acted))
+    if token.reacted:
+        marks.append((_REACTED, True))
+    return marks
+
+
+@dataclass(frozen=True)
+class Placement:
+    """Where a token is being drawn this frame, in squares."""
+
+    x: float
+    y: float
+    opacity: float
+    #: How much smaller than a square, per side, as a fraction of one: a body on
+    #: the floor is drawn a size down.
+    shrink: float
+    #: Going down right now, as opposed to already lying there.
+    falling: bool = False
+
+
+@dataclass(frozen=True)
+class Floating:
+    """A number rising off a token, part-way through its second on screen."""
+
+    square: tuple[int, int]
+    text: str
+    colour: QColor
+    #: How far it has risen, in squares.
+    rise: float
+    alpha: float
+
+
 #: How big the wheel is, as a fraction of the map's smaller side, and where its
 #: ring sits. Kept in one place because a wedge that is drawn and a wedge that
 #: is hit-tested disagreeing is the sort of bug nobody sees until they misclick.
@@ -307,6 +349,17 @@ class GridMap(QWidget):
     #: -- its weapons come off a sheet this widget has never seen -- so it
     #: answers with :meth:`offer`.
     radial_wanted = Signal(int)
+    #: Enter was pressed: carry out whatever is staged. The map does not know
+    #: whether anything is, which is the panel's business -- this only reports
+    #: the keypress, so there is one place that decides what it means.
+    commit_wanted = Signal()
+    #: Escape was pressed with no wheel open, which is the other thing Escape
+    #: means once a turn can be held: forget it.
+    staging_cancelled = Signal()
+    #: Something that is drawn changed -- a token, a wall, a frame of a walk.
+    #: For the 3D view, which draws this map's state rather than keeping its
+    #: own: see :meth:`update`.
+    shown = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -374,6 +427,18 @@ class GridMap(QWidget):
         self._frames = QTimer(self)
         self._frames.setInterval(FRAME_MS)
         self._frames.timeout.connect(self._next_frame)
+
+    def update(self, *args) -> None:
+        """Repaint, and tell anyone else drawing this map that it changed.
+
+        Every change to what is on the map already ends here, because the flat
+        map has to repaint for it. Hanging the notice on the same call means the
+        3D view cannot miss a change that somebody adds later and only thinks to
+        repaint for -- which is how two views of one fight would come to
+        disagree.
+        """
+        super().update(*args)
+        self.shown.emit()
 
     # ------------------------------------------------------------------ input
 
@@ -624,6 +689,124 @@ class GridMap(QWidget):
     @property
     def selected(self) -> int | None:
         return self._selected
+
+    # ------------------------------------------------------ for the 3D view
+    #
+    # The 3D view is a second way of drawing *this* map, not a second map. It
+    # reads what is here and sends what the person did back through the same
+    # doors a click on the flat map goes through, so a rule about what a click
+    # means is written once -- and a table where the DM looks at the fight in
+    # 3D and a player looks at it flat is still one fight.
+
+    @property
+    def grid_size(self) -> tuple[int, int]:
+        return self._width, self._height
+
+    @property
+    def obstacles(self) -> frozenset[tuple[int, int]]:
+        return frozenset(self._obstacles)
+
+    @property
+    def preview(self) -> Preview | None:
+        return self._preview
+
+    @property
+    def choices(self) -> list[Choice]:
+        """What the open wheel is offering. Empty when it is shut."""
+        return list(self._choices) if self._radial is not None else []
+
+    def tokens_shown(self) -> list[Token]:
+        """Everything drawn, including whoever is still on their way out."""
+        return self._drawable()
+
+    def choose(self, index: int) -> None:
+        """Pick one wedge of the open wheel, as a click on it would."""
+        if self._radial is None or not 0 <= index < len(self._choices):
+            return
+        self._picked_wedge(self._choices[index])
+
+    def point_at(self, square: tuple[int, int] | None) -> None:
+        """The pointer is over ``square`` -- or over nothing, for None.
+
+        Only matters while a move is waiting for its square: that is when the
+        walk to wherever the pointer is gets drawn.
+        """
+        if self._awaiting is None or self._awaiting.kind != "move":
+            return
+        path = self._path_to(square)
+        if path != self._hover_path:
+            self._hover_path = path
+            self.update()
+
+    def hover_walk(self) -> list[tuple[tuple[int, int], bool]]:
+        """The walk being pointed at, square by square, and whether each is in reach.
+
+        The first square is where the walker stands. Worked out here rather
+        than by whoever draws it, so the flat line and the 3D one turn red at
+        the same square.
+        """
+        if len(self._hover_path) < 2:
+            return []
+        mover = next((t for t in self._drawable() if t.id == self._selected), None)
+        if mover is None:
+            return []
+        steps = len(self._hover_path) - 1
+        reach = mover.squares_left if mover.is_turn else steps
+        return [(square, index <= reach) for index, square in enumerate(self._hover_path)]
+
+    def press_square(
+        self,
+        square: tuple[int, int] | None,
+        button: Qt.MouseButton,
+        modifiers: Qt.KeyboardModifier,
+        global_position: QPoint,
+    ) -> None:
+        """What a click on ``square`` means, wherever it was clicked.
+
+        Everything a press does once it is known which square it landed on.
+        The wheel and the middle-button pan are not here: both are about
+        pixels, and each view has its own.
+        """
+        if self.frozen:
+            return
+        token = self._token_at(*square) if square else None
+
+        # Having been asked for a square or a creature, the next click answers.
+        if self._awaiting is not None and button == Qt.MouseButton.LeftButton:
+            self._answer_with(square, token)
+            return
+
+        # Ctrl-click builds the room: something in the way, or no longer. Held
+        # rather than moded, because a DM adding one rock should not have to
+        # remember to turn a tool off before moving the next goblin.
+        if (
+            not self.read_only
+            and square is not None
+            and button == Qt.MouseButton.LeftButton
+            and modifiers & Qt.KeyboardModifier.ControlModifier
+        ):
+            self.obstacle_toggled.emit(square[0], square[1])
+            return
+
+        if button == Qt.MouseButton.RightButton:
+            self.menu_requested.emit(token.id if token else -1, global_position)
+            return
+
+        if token is not None:
+            self._selected = token.id
+            self.picked.emit(token.id)
+            self.update()
+            return
+
+        self.picked.emit(-1)
+        if square is not None:
+            self.square_clicked.emit(square[0], square[1])
+
+    def drop_on(self, combatant_id: int, square: tuple[int, int] | None) -> None:
+        """A row of the initiative order let go of over ``square``."""
+        if self.read_only or square is None:
+            return
+        self.dropped.emit(combatant_id, square[0], square[1])
 
     # ---------------------------------------------------------------- drawing
 
@@ -992,23 +1175,15 @@ class GridMap(QWidget):
         font.setBold(True)
         painter.setFont(font)
 
-        for effect in self._effects:
-            if effect.kind != "float" or effect.waiting(now):
-                continue
-            square = self._square_of(effect.combatant) or effect.toward
-            if square is None:
-                continue
-            done = effect.progress(now)
-            box = self._at(square[0], square[1], cell, origin)
-            colour = QColor(effect.colour)
-            # Rises a square's height over its life, and fades over the last
-            # third, so it is readable before it starts going.
-            colour.setAlpha(int(255 * min(1.0, (1.0 - done) * 3)))
+        for number in self.floating(now):
+            box = self._at(number.square[0], number.square[1], cell, origin)
+            colour = QColor(number.colour)
+            colour.setAlpha(int(255 * number.alpha))
             painter.setPen(QPen(colour))
             painter.drawText(
-                box.translated(0, int(-cell * done)),
+                box.translated(0, int(-cell * number.rise)),
                 Qt.AlignmentFlag.AlignCenter,
-                effect.text,
+                number.text,
             )
 
     def _draw_preview(self, painter: QPainter, cell: int, origin: QPoint) -> None:
@@ -1061,15 +1236,15 @@ class GridMap(QWidget):
         through it is what makes that worth drawing at all -- the long way
         costs the long way, and the line is where you find that out.
         """
-        if len(self._hover_path) < 2:
+        walk = self.hover_walk()
+        if not walk:
             return
-        mover = next((t for t in self._drawable() if t.id == self._selected), None)
-        if mover is None:
-            return
+        mover = next(t for t in self._drawable() if t.id == self._selected)
 
-        steps = len(self._hover_path) - 1
-        reach = mover.squares_left if mover.is_turn else steps
-        centres = [self._at(x, y, cell, origin).center() for x, y in self._hover_path]
+        reach = max(
+            (index for index, (_square, near) in enumerate(walk) if near), default=0
+        )
+        centres = [self._at(x, y, cell, origin).center() for (x, y), _near in walk]
 
         def _segment(points: list[QPoint], colour: QColor) -> None:
             if len(points) < 2:
@@ -1095,7 +1270,7 @@ class GridMap(QWidget):
         box = self._at(*end, cell, origin).adjusted(
             cell // 8, cell // 8, -cell // 8, -cell // 8
         )
-        ring = _HURT if steps > reach else _PLAN
+        ring = _PLAN if walk[-1][1] else _HURT
         painter.setPen(QPen(ring, max(1, cell // 16), Qt.PenStyle.DashLine))
         painter.setBrush(ghost)
         painter.drawEllipse(box)
@@ -1183,8 +1358,28 @@ class GridMap(QWidget):
         is drawn -- the state underneath has already moved on, and drawing from
         that would put it at its destination before it has walked there.
         """
-        square = self._at(token.x, token.y, cell, origin)
+        where = self.placement(token, now)
+        left, top, _right, _bottom = self.bounds
+        square = QRect(
+            int(origin.x() + (where.x - left) * cell),
+            int(origin.y() + (where.y - top) * cell),
+            cell,
+            cell,
+        )
+        shrink = int(cell * where.shrink)
+        return square.adjusted(shrink, shrink, -shrink, -shrink), where.opacity
+
+    def placement(self, token: Token, now: float | None = None) -> "Placement":
+        """Where a token is right now, in squares, and how it looks there.
+
+        In squares rather than pixels so that both views move a creature along
+        the same walk at the same moment: the 3D view has no pixels to share,
+        and two copies of the easing would be two walks.
+        """
+        now = time.monotonic() if now is None else now
+        x, y = float(token.x), float(token.y)
         opacity = 1.0
+        shrink = 0.0
 
         walking = self._effect_on(token.id, "move")
         if walking and len(walking.path) > 1:
@@ -1192,26 +1387,18 @@ class GridMap(QWidget):
             steps = len(walking.path) - 1
             exact = done * steps
             index = min(steps - 1, int(exact))
-            start = self._at(*walking.path[index], cell, origin)
-            end = self._at(*walking.path[index + 1], cell, origin)
+            (ax, ay), (bx, by) = walking.path[index], walking.path[index + 1]
             between = exact - index
-            square = QRect(
-                int(start.x() + (end.x() - start.x()) * between),
-                int(start.y() + (end.y() - start.y()) * between),
-                cell,
-                cell,
-            )
+            x = ax + (bx - ax) * between
+            y = ay + (by - ay) * between
 
         lunging = self._effect_on(token.id, "lunge")
         if lunging and lunging.toward is not None and not lunging.waiting(now):
             done = lunging.progress(now)
             # Out and back, so it reads as a swing rather than a step.
             reach = (1.0 - abs(done * 2 - 1.0)) * 0.4
-            target = self._at(*lunging.toward, cell, origin)
-            square = square.translated(
-                int((target.x() - square.x()) * reach),
-                int((target.y() - square.y()) * reach),
-            )
+            x += (lunging.toward[0] - x) * reach
+            y += (lunging.toward[1] - y) * reach
 
         falling = self._effect_on(token.id, "down")
         if falling:
@@ -1220,14 +1407,36 @@ class GridMap(QWidget):
             # on that square, and somebody can reach them.
             done = falling.progress(now)
             opacity = 1.0 - done * (1.0 - GHOST_OPACITY)
-            shrink = int(cell * done * 0.2)
-            square = square.adjusted(shrink, shrink, -shrink, -shrink)
+            shrink = done * 0.2
         elif token.down:
             opacity = GHOST_OPACITY
-            shrink = int(cell * 0.2)
-            square = square.adjusted(shrink, shrink, -shrink, -shrink)
+            shrink = 0.2
 
-        return square, opacity
+        return Placement(x, y, opacity, shrink, falling is not None)
+
+    def floating(self, now: float | None = None) -> list["Floating"]:
+        """The numbers rising off whoever was just hit, as they stand now."""
+        now = time.monotonic() if now is None else now
+        shown = []
+        for effect in self._effects:
+            if effect.kind != "float" or effect.waiting(now):
+                continue
+            square = self._square_of(effect.combatant) or effect.toward
+            if square is None:
+                continue
+            done = effect.progress(now)
+            # Rises a square's height over its life, and fades over the last
+            # third, so it is readable before it starts going.
+            shown.append(
+                Floating(
+                    square=square,
+                    text=effect.text,
+                    colour=QColor(effect.colour),
+                    rise=done,
+                    alpha=min(1.0, (1.0 - done) * 3),
+                )
+            )
+        return shown
 
     def _draw_token(
         self,
@@ -1306,14 +1515,7 @@ class GridMap(QWidget):
 
         size = max(5, cell // 5)
         gap = max(2, size // 3)
-        marks: list[tuple[QColor, bool]] = []
-        if token.is_turn:
-            # Filled while it is still there, hollow once it is gone: a spent
-            # move should read as an outline of the thing you no longer have.
-            marks.append((_MOVE_LEFT, token.squares_left > 0))
-            marks.append((_ACTION_LEFT, not token.acted))
-        if token.reacted:
-            marks.append((_REACTED, True))
+        marks = budget_marks(token)
         if not marks:
             return
 
@@ -1351,9 +1553,20 @@ class GridMap(QWidget):
         anybody; a player's can act for their own character on its own turn and
         for nothing else. A wheel that offered choices it could not carry out
         would be a worse lie than no wheel.
+
+        Enter carries out a staged turn and Escape forgets one. Escape does the
+        nearer thing first: with a wheel open it closes the wheel, because that
+        is what the person just opened and what they are looking at.
         """
         if event.key() == Qt.Key.Key_Escape:
-            self.close_radial()
+            if self._radial is not None or self._awaiting is not None:
+                self.close_radial()
+            else:
+                self.staging_cancelled.emit()
+            return
+
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.commit_wanted.emit()
             return
 
         # Zoom from the keyboard too, since a laptop trackpad is a poor wheel.
@@ -1383,8 +1596,6 @@ class GridMap(QWidget):
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt's name
         if self.frozen:
             return
-        square = self._square_at(event.position().toPoint())
-        token = self._token_at(*square) if square else None
 
         # The wheel gets the click before the board does, so picking a wedge
         # over a token does not also select that token.
@@ -1399,29 +1610,6 @@ class GridMap(QWidget):
             self.close_radial()
             return
 
-        # Having been asked for a square or a creature, the next click answers.
-        if self._awaiting is not None and event.button() == Qt.MouseButton.LeftButton:
-            self._answer_with(square, token)
-            return
-
-        # Ctrl-click builds the room: something in the way, or no longer. Held
-        # rather than moded, because a DM adding one rock should not have to
-        # remember to turn a tool off before moving the next goblin.
-        if (
-            not self.read_only
-            and square is not None
-            and event.button() == Qt.MouseButton.LeftButton
-            and event.modifiers() & Qt.KeyboardModifier.ControlModifier
-        ):
-            self.obstacle_toggled.emit(square[0], square[1])
-            return
-
-        if event.button() == Qt.MouseButton.RightButton:
-            self.menu_requested.emit(
-                token.id if token else -1, event.globalPosition().toPoint()
-            )
-            return
-
         # The middle button drags the board about. Its own button rather than a
         # modifier on the left one, so panning can never be mistaken for the
         # gesture that moves a creature.
@@ -1430,15 +1618,12 @@ class GridMap(QWidget):
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
             return
 
-        if token is not None:
-            self._selected = token.id
-            self.picked.emit(token.id)
-            self.update()
-            return
-
-        self.picked.emit(-1)
-        if square is not None:
-            self.square_clicked.emit(square[0], square[1])
+        self.press_square(
+            self._square_at(event.position().toPoint()),
+            event.button(),
+            event.modifiers(),
+            event.globalPosition().toPoint(),
+        )
 
 
     def _picked_wedge(self, choice: Choice) -> None:
@@ -1498,13 +1683,7 @@ class GridMap(QWidget):
                 self._hovering = over
                 self.update()
             return
-        if self._awaiting is not None and self._awaiting.kind == "move":
-            square = self._square_at(event.position().toPoint())
-            path = self._path_to(square)
-            if path != self._hover_path:
-                self._hover_path = path
-                self.update()
-            return
+        self.point_at(self._square_at(event.position().toPoint()))
 
     def leaveEvent(self, _event) -> None:  # noqa: N802 - Qt's name
         # The pointer left without landing on a square, so there is nothing
@@ -1543,12 +1722,19 @@ class GridMap(QWidget):
         self.update()
         if not self._will_take(event) or square is None:
             return
-        try:
-            combatant_id = int(bytes(event.mimeData().data(COMBATANT_MIME)).decode())
-        except (TypeError, ValueError):
+        combatant_id = dragged_combatant(event.mimeData())
+        if combatant_id is None:
             return
         event.acceptProposedAction()
-        self.dropped.emit(combatant_id, square[0], square[1])
+        self.drop_on(combatant_id, square)
 
     def _will_take(self, event) -> bool:
         return not self.read_only and event.mimeData().hasFormat(COMBATANT_MIME)
+
+
+def dragged_combatant(mime) -> int | None:
+    """Which combatant a drag is carrying, or None if it is not carrying one."""
+    try:
+        return int(bytes(mime.data(COMBATANT_MIME)).decode())
+    except (TypeError, ValueError):
+        return None

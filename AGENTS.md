@@ -49,6 +49,22 @@ Use the project virtualenv, not whichever Python is first on `PATH`:
 .venv/Scripts/python -m pytest
 ```
 
+**A fresh checkout's virtualenv may hold only what the app needs to run.** If
+that command says `No module named pytest`, the test dependencies are not in it
+yet -- they are an extra, and it is the same one CI installs:
+
+```bash
+.venv/Scripts/python -m pip install -e ".[dev]"
+```
+
+Run the suite headlessly and **capture the exit code before piping it
+anywhere**. Piping to `tail` reports the exit status of `tail`, which is always
+success, and has produced confident reports of a green suite that was not:
+
+```bash
+QT_QPA_PLATFORM=offscreen .venv/Scripts/python -m pytest tests/ -q > out.txt; echo $?
+```
+
 The suite takes two to three minutes and is expected to be green. Panels are
 tested headlessly through `pytest-qt`; the agent is `asyncio` and runs under
 `asyncio_mode = "auto"`, so coroutine tests need no marker.

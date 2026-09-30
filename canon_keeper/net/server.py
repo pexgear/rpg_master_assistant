@@ -27,7 +27,7 @@ from PySide6.QtWebSockets import QWebSocket, QWebSocketServer
 from canon_keeper import campaigns
 from canon_keeper.content import Content
 from canon_keeper.net import discovery
-from canon_keeper_protocol import auth, enrol, grid, robots
+from canon_keeper_protocol import auth, enrol, grid, robots, turns
 from canon_keeper_protocol.messages import Played
 from canon_keeper.repo.chat import (
     DEFAULT_LIMIT,
@@ -224,6 +224,11 @@ class SessionServer(QObject):
         #: the human DM. Runtime only: a bend nobody answered is about a moment
         #: that has passed.
         self._bends: dict[str, dict] = {}
+        #: The creature the DM has asked the agent to write one turn for, or
+        #: None. A grant rather than a mode: it lets exactly one proposal
+        #: through with autopilot off and is spent the moment it is used, so
+        #: asking for a translation never becomes the agent running the fight.
+        self._translating: int | None = None
         self._turn_clock = QTimer(self)
         self._turn_clock.setSingleShot(True)
         self._turn_clock.timeout.connect(self._nobody_answered)
@@ -432,6 +437,8 @@ class SessionServer(QObject):
             self._handle_enlist(socket, session, message)
         elif message.type == MessageType.TERRAIN:
             self._handle_terrain(socket, session, message)
+        elif message.type == MessageType.TRANSLATE:
+            self._handle_translate(socket, session, message)
         elif message.type == MessageType.PROPOSE:
             self._handle_propose(socket, session, message)
         elif message.type == MessageType.ACTED:
@@ -1499,6 +1506,10 @@ class SessionServer(QObject):
         something the host enforces, not something the agent is trusted to
         observe. A player cannot do any of it yet; see the known gaps in
         ARCHITECTURE.md.
+
+        Putting a turn to a player is *not* one of the three, and asks
+        :meth:`_may_propose` instead. Keep it that way: these three change the
+        fight, and an offer does not.
         """
         if session.is_agent:
             return self._autopilot
@@ -1737,6 +1748,19 @@ class SessionServer(QObject):
 
         x, y = message.get("x"), message.get("y")
         initiative = message.get("initiative")
+        if isinstance(x, int) and isinstance(y, int) and not self.repos.encounters.free_for(
+            encounter.id, x, y
+        ):
+            # Said rather than quietly dropped. This door wrote the square
+            # without asking, so autopilot could stand a goblin outside the
+            # room -- and would then describe it as standing there, which is
+            # the one thing it must never do.
+            self._send_refusal(
+                socket,
+                f"{grid.label(x, y)} is off the map, taken, or in the way. "
+                "Nothing is standing there.",
+            )
+            return
         combatant = self.repos.encounters.add(
             encounter.id,
             entity_id=entity_id,
@@ -1876,12 +1900,11 @@ class SessionServer(QObject):
                 return
 
         if not self._do_move(combatant_id, x, y, spending=walking):
-            self._send(
-                socket,
-                MessageType.ERROR,
-                code="refused",
-                message="That square is off the grid, or someone is standing in it.",
+            trouble = self._walk_went_wrong(
+                combatant_id, x, y, entity.name if entity is not None else "They"
             )
+            if trouble:
+                self._send_refusal(socket, trouble)
             return
         log.info("%s moved combatant %s to %s,%s", session.member.label, combatant_id, x, y)
         if session.is_agent:
@@ -1920,6 +1943,18 @@ class SessionServer(QObject):
             and y is not None
         )
         if walking:
+            # Asked before anything is drawn, because a square that cannot be
+            # stood on is a fact about the map and not something a walk finds
+            # out on arrival. ``place`` has always refused it -- but it is the
+            # last thing to run, by which point the walk has been sent to every
+            # screen and swung at along the way. Two goblins running for the
+            # same corner left the second one drawn standing in the first one's
+            # square, having never moved at all and with nothing sent after to
+            # put it back.
+            if not self.repos.encounters.free_for(
+                before.encounter_id, x, y, ignoring=combatant_id
+            ):
+                return False
             # Sent *before* the swings, so every screen already has the walk to
             # time them against: a swing provoked five squares along has to
             # land five squares along, not the moment the creature sets off.
@@ -1962,6 +1997,40 @@ class SessionServer(QObject):
         # The DM's own map reads the database, so it does not know yet.
         self.encounter_applied.emit()
         return True
+
+    def _walk_went_wrong(self, combatant_id: int, x, y, who: str) -> str:
+        """Why a walk did not end where it was asked to, in a sentence.
+
+        A walk fails for two quite different reasons, and every door that
+        reported one reported both the same way: "that square is taken, or
+        something is in the way". True of the ordinary case, and a red herring
+        for the other one -- the walker cut down partway along, which
+        :meth:`_fell_on_the_way` has already described in the right words. So
+        the table was told somebody was standing on an empty square, at the
+        loudest moment the fight had.
+
+        Empty when there is nothing left to say.
+        """
+        fallen = self.repos.encounters.combatant(combatant_id)
+        if fallen is not None and fallen.down:
+            return ""
+        return (
+            f"{who} could not get to {grid.label(x, y)} -- it is taken, or "
+            "something is in the way."
+        )
+
+    def _still_up(self, combatant_id: int) -> bool:
+        """Whether this creature is in any state to do anything at all.
+
+        Asked before the *action* half of a turn, because the move half can end
+        with the mover unconscious. A proposal to walk over and swing is
+        carried out in two steps, and nothing between them noticed that the
+        creature holding the axe had been cut down on the first one -- the
+        turn had already passed to somebody else by then, which is exactly why
+        the one-action rule did not catch it either.
+        """
+        combatant = self.repos.encounters.combatant(combatant_id)
+        return combatant is not None and not combatant.down
 
     def _fell_on_the_way(self, combatant_id: int, before, route, reached: int) -> None:
         """A walk that ended in the walker going down partway along it.
@@ -2117,10 +2186,111 @@ class SessionServer(QObject):
     # a machine the power to walk your character into a fire is a different
     # product from one that offers to.
 
-    def _handle_propose(self, socket: QWebSocket, session: _Session, message) -> None:
-        if not self._may_run_the_table(session):
+    def _may_propose(self, session: _Session, combatant_id) -> bool:
+        """Who may put a turn to a player.
+
+        Not :meth:`_may_run_the_table`, deliberately. That one answers for
+        moving a token, passing the turn and setting an initiative all at once,
+        and widening it so a DM could ask for one translation would hand the
+        agent the other three for free -- a rule loosened at one door and
+        thereby at doors nobody was thinking about.
+
+        A proposal is the one thing that is safe to grant on its own, because
+        it is an offer: the player still has to accept it, and refusing costs a
+        click. So the grant lives here and nowhere else.
+        """
+        if not session.is_agent:
+            return session.viewer.is_dm
+        if self._autopilot:
+            return True
+        if self._translating is None or combatant_id != self._translating:
+            return False
+        # Still *their* turn. Not the turn rule over again -- that one is
+        # `_breaks_a_rule`'s, and is the DM's to waive -- but the edge of the
+        # grant: the DM asked for one creature's turn, and once the turn has
+        # moved on there is no longer a turn of theirs to write. Checked here
+        # rather than cleared when the turn passes, because the turn passes
+        # from several places and a grant that had to be swept up by each of
+        # them would eventually be missed by one.
+        encounter = self._the_running_fight()
+        return encounter is not None and encounter.turn_combatant_id == combatant_id
+
+    def _handle_translate(self, socket: QWebSocket, session: _Session, message) -> None:
+        """The DM asks for a line of plain English as a turn.
+
+        The DM's door only, and it does not touch autopilot: the point of it is
+        the evening where somebody is running their own table and wants one
+        sentence worked out, not one where they have handed the table over.
+
+        Nothing is refused quietly. Every way this can fail is something the DM
+        just clicked on, so each one says what happened.
+        """
+        if session.is_agent or not session.viewer.is_dm:
             self._refuse_the_fight(socket)
             return
+
+        said = str(message.get("text", "")).strip()[:MAX_CHAT_LENGTH]
+        if not said:
+            self._send_refusal(socket, "There is nothing there to turn into a turn.")
+            return
+
+        encounter = self._the_running_fight()
+        combatant = (
+            self.repos.encounters.combatant(encounter.turn_combatant_id)
+            if encounter is not None and encounter.turn_combatant_id is not None
+            else None
+        )
+        entity = (
+            self.repos.entities.get(combatant.entity_id)
+            if combatant is not None and combatant.entity_id is not None
+            else None
+        )
+        if encounter is None or combatant is None or entity is None:
+            self._send_refusal(socket, "Nobody's turn is up in a fight right now.")
+            return
+
+        # The speaker has to be the one whose turn it is, and this is the only
+        # place that can say so: the client knows a name, and a name is the
+        # half of "who plays this character" that drifts. See `_who_plays`.
+        speaking = self._account_of_member(str(message.get("member", "")))
+        theirs = self._who_plays(entity)
+        if theirs is None:
+            self._send_refusal(
+                socket,
+                "Nobody plays that character, so there is nobody to put a turn "
+                "to. Move it yourself.",
+            )
+            return
+        if speaking is None or speaking != theirs:
+            # Said now rather than letting the agent find out. The mark sits
+            # beside a line that may have scrolled past several turns ago, and
+            # the honest answer is about the turn, not about the sentence.
+            self._send_refusal(socket, f"It is {entity.name}'s turn, not theirs.")
+            return
+
+        # The grant is written before the agent is told, because the agent may
+        # answer faster than this method returns.
+        self._translating = combatant.id
+        if not self._tell_the_agent(
+            MessageType.TRANSLATE_THIS,
+            combatant=combatant.id,
+            who=entity.name,
+            said=said,
+        ):
+            self._translating = None
+            self._send_refusal(
+                socket,
+                "The agent is not connected, so there is nothing to read that. "
+                "Start it from the table panel.",
+            )
+
+    def _handle_propose(self, socket: QWebSocket, session: _Session, message) -> None:
+        if not self._may_propose(session, message.get("combatant")):
+            self._refuse_the_fight(socket)
+            return
+        # Spent on use, whatever becomes of the proposal. A grant that outlived
+        # the one turn it was given for would be autopilot by another name.
+        self._translating = None
 
         encounter = self._the_running_fight()
         combatant_id = message.get("combatant")
@@ -2177,6 +2347,90 @@ class SessionServer(QObject):
             return
 
         self._offer(action, entity)
+
+    def is_played_here(self, combatant_id: int) -> bool:
+        """Whether somebody is playing this creature *and is at the table now*.
+
+        Both halves matter, and the second is the one worth stating. A character
+        whose player has gone home is the DM's to run: putting a turn to an empty
+        chair would hold the fight until the clock gave up, which is a worse
+        answer than the DM simply playing them. So an offer is only made to
+        somebody who could actually answer it.
+
+        Asked by the DM's own panel before a staged turn goes anywhere, so that
+        "carry it out" and "put it to them" is one decision made in one place.
+        The panel cannot answer it: which login plays a character is what
+        :meth:`_who_plays` exists to settle, and a second opinion worked out
+        from the entity alone is how those two halves drift apart.
+        """
+        entity = self._entity_of(combatant_id)
+        if entity is None:
+            return False
+        theirs = self._who_plays(entity)
+        if theirs is None:
+            return False
+        return any(
+            session.account_id == theirs for session in self._sessions.values()
+        )
+
+    def offer_turn(
+        self, combatant_id: int, move=None, target=None, weapon: str = "", steps=None
+    ) -> str:
+        """Put a turn to whoever plays this character. Returns a reason, or "".
+
+        The DM's half of a symmetric deal. Either side may propose; the one being
+        asked answers once. Staging it *was* the DM's consent, so an accepted
+        offer is carried out without coming back to them -- coming back would be
+        asking the same person the same question twice.
+
+        The sentence the player reads is built here from the fields that were
+        just checked, rather than written separately, so it cannot describe a
+        turn other than the one it carries.
+        """
+        combatant = self.repos.encounters.combatant(combatant_id)
+        entity = self._entity_of(combatant_id)
+        encounter = self._the_running_fight()
+        if encounter is None or combatant is None or entity is None:
+            return "That is not in the fight being run."
+
+        # A proposal still carries the shorthand -- one move, one attack, in that
+        # order -- so a staged turn that does more than that cannot be put to
+        # anybody yet. Said plainly rather than quietly truncated: sending them
+        # half of what the DM lined up would be describing a turn nobody chose.
+        walk = turns.normalise(steps, move=move, target=target, weapon=weapon)
+        walks = [s for s in walk if s["kind"] == turns.MOVE]
+        swings = [s for s in walk if s["kind"] == turns.ATTACK]
+        if len(walks) > 1 or len(swings) > 1 or any(
+            s["kind"] == turns.DASH for s in walk
+        ):
+            return (
+                "A turn with more than one move or attack cannot be put to a "
+                "player yet. Carry it out yourself, or line up a simpler one."
+            )
+        move = (walks[0]["x"], walks[0]["y"]) if walks else None
+        target = swings[0]["target"] if swings else None
+        weapon = swings[0].get("weapon", "") if swings else ""
+
+        target_name = ""
+        if target is not None:
+            hit = self._entity_of(int(target))
+            target_name = hit.name if hit is not None else "someone"
+
+        fields = {
+            "move": list(move) if move is not None else None,
+            "target": int(target) if target is not None else None,
+            "weapon": weapon,
+            "text": turns.describe(
+                move=move, target_name=target_name, weapon=weapon
+            ),
+        }
+        problem, action, _bendable = self._shape_the_action(
+            encounter, combatant, entity, fields
+        )
+        if problem:
+            return problem
+        self._offer(action, entity)
+        return ""
 
     def _do_propose(self, combatant_id: int, fields: dict, bending: bool = False) -> None:
         """Build and offer a turn, skipping the rules the DM has waived."""
@@ -2406,7 +2660,12 @@ class SessionServer(QObject):
             )
         if combatant is None or combatant.entity_id != entity.id:
             return speed
-        return max(0, speed - int(encounter.moved_squares or 0))
+        # Dash: the action was spent on moving again, so the allowance is your
+        # speed twice. Read from what the action *became* rather than from the
+        # flag saying it is gone -- a swing spends the same flag and buys no
+        # squares at all.
+        allowance = speed * 2 if encounter.dashed else speed
+        return max(0, allowance - int(encounter.moved_squares or 0))
 
     def already_acted(self, combatant, entity) -> str:
         """Whether this creature's action is already spent, and so says.
@@ -2427,6 +2686,18 @@ class SessionServer(QObject):
             return ""
         if not encounter.action_used:
             return ""
+        # Extra Attack: one action, more than one swing. The flag says the action
+        # is gone, which used to end the matter -- and is why a level-five fighter
+        # still got one swing. What decides is how many attacks that action has
+        # produced against how many it is worth.
+        sheet = (entity.data or {}).get("sheet") or {}
+        allowed = derive.attacks_per_action(sheet, self.content)
+        if encounter.attacks_made < allowed:
+            return ""
+        if allowed > 1:
+            return (
+                f"{entity.name} has taken all {allowed} attacks this turn."
+            )
         return f"{entity.name} has already acted this turn."
 
     def _send_refusal(self, socket: QWebSocket, message: str) -> None:
@@ -3127,51 +3398,130 @@ class SessionServer(QObject):
     def take_turn(self, combatant_id: int, move=None, target=None, weapon: str = "") -> str:
         """The DM taking a turn by hand, with no agent anywhere near it.
 
-        Called by their own panel rather than sent over the wire, because the
-        DM's app *is* the host. It still goes through here rather than writing
-        to the database, for the half that is not a database write: the dice,
-        the armour class, and the hit points that come off the other creature.
+        The shorthand: a whole move and then a whole attack. Kept because every
+        caller that existed before turns became a sequence uses it, and because
+        most turns really are one of each. :meth:`take_turn_steps` is the same
+        thing with the order spelled out.
+        """
+        return self.take_turn_steps(
+            combatant_id,
+            turns.normalise(move=move, target=target, weapon=weapon),
+        )[0]
 
-        Returns a reason it could not happen, or empty. No confirmation step --
-        the DM asking themselves whether they meant it would be a dialog with
-        nobody on the other side.
+    def take_turn_steps(self, combatant_id: int, steps) -> tuple[str, int]:
+        """A turn as an ordered sequence. Returns (reason it stopped, steps done).
+
+        Called by the DM's own panel rather than sent over the wire, because the
+        DM's app *is* the host. It still goes through here rather than writing to
+        the database, for the half that is not a database write: the dice, the
+        armour class, and the hit points that come off the other creature.
+
+        **The count is not decoration.** A turn can stop halfway -- three squares
+        and then a swing that is out of reach -- and the three squares have
+        happened. Whoever is holding the turn needs to know how much of it to
+        stop holding, or committing it again would walk those squares twice.
+
+        Two things are re-read between steps, and both have bitten before. The
+        creature has *moved*, so the next step must be measured from where it is
+        now rather than from where the turn started. And it may have been cut
+        down on the way -- an opportunity attack lands mid-walk -- in which case
+        the rest of the turn is not refused, it simply has nobody left to take
+        it.
         """
         encounter = self._the_running_fight()
         combatant = self.repos.encounters.combatant(combatant_id)
         entity = self._entity_of(combatant_id)
         if encounter is None or combatant is None or entity is None:
-            return "That is not in the fight being run."
+            return "That is not in the fight being run.", 0
 
-        if move:
-            x, y = int(move[0]), int(move[1])
-            if not encounter.holds(x, y):
-                return f"{x},{y} is off the map."
-            # The same allowance a player is held to. Dragging a token remains
-            # free -- that gesture means "put it there", not "walk there" --
-            # but a turn taken *as a turn* obeys the rules whoever takes it, or
-            # the budget on screen is decorative.
-            # Asked first: a creature walled in has nowhere to walk at all,
-            # and being told the distance instead would be answering a
-            # question it did not ask.
-            nowhere = self._no_way_through(combatant, entity, x, y)
-            if nowhere:
-                return nowhere
-            short = self._too_far(combatant, entity, x, y)
-            if short:
-                return short
-            if not self._do_move(combatant_id, x, y, spending=True):
-                return f"{x},{y} is taken, or something is in the way."
+        done = 0
+        for step in turns.normalise(steps):
+            if step["kind"] == turns.MOVE:
+                problem = self._walk_one_step(encounter, combatant, entity, step)
+            elif step["kind"] == turns.DASH:
+                problem = self._dash_one_step(encounter, combatant, entity)
+            else:
+                problem = self._swing_one_step(combatant, entity, step)
+            if problem:
+                self._settle_the_turn()
+                return problem, done
+            done += 1
 
-        if target is not None:
-            spent = self.already_acted(combatant, entity)
-            if spent:
-                return spent
-            self._swing(
-                {"combatant": combatant_id, "target": int(target), "weapon": weapon}
-            )
+            # Both, and for the same reason. The creature has moved; the turn has
+            # spent something. Re-reading one and not the other is how a swing
+            # bought a Dash: the flag said used in the database and still said
+            # free in the copy this loop was holding.
+            combatant = self.repos.encounters.combatant(combatant_id)
+            encounter = self._the_running_fight() or encounter
+            if combatant is None or combatant.down:
+                # Not a refusal. The turn ended because whoever was taking it
+                # went down in the middle of it, which is already announced and
+                # has already passed the turn on.
+                break
+
+        self._settle_the_turn()
+        return "", done
+
+    def _walk_one_step(self, encounter, combatant, entity, step) -> str:
+        x, y = int(step["x"]), int(step["y"])
+        if not encounter.holds(x, y):
+            return f"{x},{y} is off the map."
+        # The same allowance a player is held to. Dragging a token remains
+        # free -- that gesture means "put it there", not "walk there" --
+        # but a turn taken *as a turn* obeys the rules whoever takes it, or
+        # the budget on screen is decorative.
+        # Asked first: a creature walled in has nowhere to walk at all,
+        # and being told the distance instead would be answering a
+        # question it did not ask.
+        nowhere = self._no_way_through(combatant, entity, x, y)
+        if nowhere:
+            return nowhere
+        short = self._too_far(combatant, entity, x, y)
+        if short:
+            return short
+        if not self._do_move(combatant.id, x, y, spending=True):
+            return self._walk_went_wrong(combatant.id, x, y, entity.name)
+        return ""
+
+    def _dash_one_step(self, encounter, combatant, entity) -> str:
+        """Spend the action on your speed again.
+
+        Not routed through :meth:`already_acted`: that one answers "may this
+        creature *attack* again", and with Extra Attack the answer can be yes
+        while the action itself is long gone. Dashing needs the action, so it asks
+        about the action.
+        """
+        if encounter.turn_combatant_id != combatant.id:
+            return f"It is not {entity.name}'s turn."
+        if encounter.action_used:
+            return f"{entity.name} has already used their action this turn."
+        self.repos.encounters.dash(encounter.id)
+        self._broadcast_system(f"{entity.name} dashes.")
+        return ""
+
+    def _swing_one_step(self, combatant, entity, step) -> str:
+        spent = self.already_acted(combatant, entity)
+        if spent:
+            return spent
+        # What comes back matters here: a swing that could not land stops the
+        # turn, the same way a walk that could not happen does.
+        return self._swing(
+            {
+                "combatant": combatant.id,
+                "target": int(step["target"]),
+                "weapon": step.get("weapon", ""),
+            }
+        )
+
+    def _settle_the_turn(self) -> None:
+        """Publish once, whatever happened. Half a turn is still a change.
+
+        In one place because a turn that stopped partway is exactly the case
+        where forgetting to publish leaves every screen showing a creature that
+        has already moved standing where it was.
+        """
         self.publish_encounter()
         self.encounter_applied.emit()
-        return ""
 
     def _entity_of(self, combatant_id: int):
         combatant = self.repos.encounters.combatant(combatant_id)
@@ -3206,19 +3556,21 @@ class SessionServer(QObject):
                 action["combatant"], x, y, spending=True
             )
             if not moved:
-                self._tell(
-                    session.account_id,
-                    reason
-                    or f"{action['who']} could not get to {x},{y} -- somebody or "
-                    "something is there now.",
+                trouble = reason or self._walk_went_wrong(
+                    action["combatant"], x, y, action["who"]
                 )
+                if trouble:
+                    self._tell(session.account_id, trouble)
 
         if moved:
             self._broadcast_system(
                 f"{action['who']} moves to {action['move'][0]},{action['move'][1]}."
             )
 
-        if action.get("target") is not None:
+        # Cut down on the way over, there is no second half to the turn. The
+        # one-action rule does not catch this on its own: falling passes the
+        # turn, and an action is only spent by whoever's turn it is.
+        if action.get("target") is not None and self._still_up(action["combatant"]):
             # A bend is the DM saying the rule does not apply this once, so it
             # skips the check the same way the reach check is skipped.
             spent = (
@@ -3257,8 +3609,19 @@ class SessionServer(QObject):
             return ""
         return f"that is {gap * 5} feet away -- too far for a {weapon.name}"
 
-    def _swing(self, action: dict, checked: bool = False, at_step: int = 0) -> None:
+    def _swing(self, action: dict, checked: bool = False, at_step: int = 0) -> str:
         """One weapon attack, rolled on the host and applied to the target.
+
+        Returns why it could not be swung, or empty when it was. **The reason is
+        returned as well as announced**, because a swing that cannot land is the
+        same kind of answer as a walk that cannot happen, and for a while it was
+        not treated as one: a refused move stopped a turn while an out-of-reach
+        swing only said so and let the turn carry on. In a turn made of steps
+        that difference is the difference between stopping and quietly going on
+        to the next thing.
+
+        Callers that only want it announced may still ignore what comes back --
+        an opportunity attack has no turn to stop.
 
         ``at_step`` is how far along the target's walk the swing lands, for an
         opportunity attack. Sent so it can be *drawn* at that point rather than
@@ -3274,21 +3637,21 @@ class SessionServer(QObject):
             else None
         )
         if attacker is None or target is None or target_combatant is None:
-            return
+            return "There is nobody there to swing at."
 
         sheet = (attacker.data or {}).get("sheet") or {}
         try:
             weapon = attack.find_weapon(sheet, self.content, action.get("weapon", ""))
         except attack.NoAttack as exc:
             self._broadcast_system(f"{attacker.name} cannot attack: {exc}")
-            return
+            return str(exc)
 
         mine = self.repos.encounters.combatant(action["combatant"])
         if not checked:
             short = self.out_of_reach(mine, target_combatant, weapon)
             if short:
                 self._broadcast_system(f"{attacker.name} swings at {target.name}: {short}.")
-                return
+                return short
 
         result = attack.resolve(
             sheet,
@@ -3300,6 +3663,9 @@ class SessionServer(QObject):
         encounter = self._the_running_fight()
         if encounter is not None and encounter.turn_combatant_id == action["combatant"]:
             self.repos.encounters.use_action(encounter.id)
+            # And which swing out of the action this was, so a second one can be
+            # told from a second action.
+            self.repos.encounters.count_attack(encounter.id)
         said = result.describe(attacker.name, target.name)
         # Shown before it is said, so the number floating off the target and
         # the line in the chat are the same event rather than two.
@@ -3324,6 +3690,9 @@ class SessionServer(QObject):
         )
         if result.hit and result.damage:
             self._take_damage(target, result.damage)
+        # Swung. A miss is not a refusal -- the d20 decided, which is the whole
+        # point of rolling it.
+        return ""
 
     def _take_damage(self, target, damage: int) -> None:
         """Apply it, and tell everyone who can see the creature.
@@ -3554,6 +3923,35 @@ class SessionServer(QObject):
         for socket, session in self._sessions.items():
             if session.account_id == account_id:
                 socket.sendTextMessage(frame)
+
+    def _account_of_member(self, member_id: str) -> int | None:
+        """The login behind a roster entry, or None if nobody is it now.
+
+        A member id is what a client can see and name; an account is what the
+        host checks things against. Somebody who has left has neither, which is
+        why this can come back empty for a line still sitting in the log.
+        """
+        if not member_id:
+            return None
+        for session in self._sessions.values():
+            if session.member is not None and session.member.id == member_id:
+                return session.account_id
+        return None
+
+    def _tell_the_agent(self, message_type, **payload) -> bool:
+        """One message to the agent, and whether there was one to receive it.
+
+        The answer matters to the caller: a DM who clicked something and got
+        silence would reasonably conclude the feature is broken, when in fact
+        nothing is running to do the work.
+        """
+        frame = encode(message_type, **payload)
+        reached = False
+        for socket, session in self._sessions.items():
+            if session.is_agent:
+                socket.sendTextMessage(frame)
+                reached = True
+        return reached
 
     def _send_to_account(self, account_id: int | None, message_type, **payload) -> None:
         """One message to every connection that login has open."""

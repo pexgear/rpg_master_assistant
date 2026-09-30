@@ -5,6 +5,124 @@ What changed, from the point of view of someone running a game. See
 
 ## Unreleased
 
+## 0.6.2
+
+The map stands up, and a turn is something you line up before it happens.
+
+**Nobody has to upgrade together, and nothing needs converting.** The wire did
+not move, so a 0.6.1 player can still join a 0.6.2 table; campaign files gain
+two columns when you open them.
+
+### The map in 3D
+
+- **The battle map stands up.** Obstacles are walls, creatures are figures in
+  their side's colour, and whoever is up has the gold ring under their feet.
+  Drag to walk round the room, drag with the middle button (or Shift and the
+  left) to slide it, scroll to get closer. Your players see it the same way.
+- **Tilted** and **From above** bring the camera back when you have lost your
+  bearings, and **Low walls** knocks the walls down when one is in the way of
+  what you want to see. The square numbers follow the edges of the room.
+- Everything you did on the map still works on it: taking a turn with Space,
+  ctrl-clicking a wall in, dropping a creature from the order, watching walks
+  and damage. Space brings the choices up as a menu at the pointer.
+- Walls are only for looking at: there is still no height, and nothing can be
+  climbed or seen over. The first time it opens there is a moment's pause while
+  your graphics card gets ready; a computer that cannot draw it at all gets the
+  old flat map instead.
+
+### Ask for a line to be worked out as a turn
+
+- **A player says what they do; you point at it.** Turn on *Offer to turn what
+  a player says into a turn* in **Agent…**, and while a fight is running a small
+  mark appears beside what the player whose turn it is has said. Clicking it
+  asks the agent to write that as a move and an attack and puts it to them to
+  accept, exactly as it would have on its own.
+- **Autopilot does not have to be on for it.** This is for the evening where you
+  are running your own table and want one sentence worked out, so asking buys
+  the agent one proposal for the creature whose turn it is and nothing else — it
+  cannot move a token, pass the turn or set an initiative on the back of it.
+  Nothing reaches your player's character until they accept, as before.
+- It costs a model call each time you click it, and nothing when you do not.
+
+### A session left on the internet is noticed
+
+- **Going online no longer outlives the app quietly.** Publishing puts the
+  address in Tailscale's own daemon rather than in Canon Keeper, so a crash, a
+  kill, or closing before it finished answering could leave your machine
+  published with nothing running behind it — and the next launch showed **Go
+  online** as though it were off.
+- It is now written down when a session is published and cleared when one is
+  taken down, so a leftover is recognised. The Table panel says which port is
+  still public and **Go offline** ends it. Nothing is undone behind your back: a
+  public address is yours to keep or drop.
+
+### A turn you line up before it happens
+
+- **Picking something on the map no longer does it at once.** Choose a move,
+  choose a weapon, choose who to hit — that is one turn, described in words at
+  the bottom of the Combat panel and drawn on the map as a dotted line, a ghost
+  and a sword. **Enter** carries it out, **Esc** forgets it. The Attack… dialog
+  lines up the same way once a fight is running, so a swing chosen there can have
+  a walk added to it before either happens.
+- **A turn that is refused stays lined up**, with the reason beside it. "That is
+  20 feet away — too far for a battleaxe" means move a square closer, not build
+  the whole turn again. **Clear** discards it outright.
+- **A turn you line up for somebody else's character is put to them.** Lining it
+  up was your half of it, so when they accept it simply happens — you are not
+  asked the same question twice. If nobody is at the table playing that character,
+  it stays yours to carry out.
+- **A turn can split its movement around the action** — three squares, swing,
+  three more. Pick a move, a weapon, and another move: the bar reads them back in
+  order, and they happen in that order. One limit: a turn with more than one move
+  or attack cannot be put to a *player* yet, and says so rather than sending them
+  a shortened version of it.
+- **If a turn stops halfway, only the rest of it stays lined up.** Three squares
+  and then a swing that cannot reach is three squares spent, so pressing **Do it**
+  again tries the swing and does not walk them twice.
+
+### Two rules the turn budget could not express
+
+- **A fighter at level five gets two swings from one Attack.** The app knew the
+  action was spent and nothing more, so a second swing looked like a second
+  action and was refused. The number comes from the SRD's own level tables, so it
+  is right for every class that has the feature.
+- **Dash.** Spend your action to move your speed again. It is a choice within the
+  turn rather than a setting, so dashing and then walking is the same turn as
+  walking, dashing, and walking on — and the app can tell which one you meant.
+  The rule is in; there is no button for it yet.
+- **A swing that cannot land now stops the turn it was part of.** It used to
+  announce itself and let the rest of the turn go ahead, which only started
+  mattering once a turn could have a second half.
+
+### Keys belong to the panel you are looking at
+
+- **A panel's keyboard shortcuts only work while that panel has the focus.** So
+  two panels can use the same key for their own version of a thing, the way two
+  applications both use Ctrl+N, and nothing goes off while you are typing in the
+  chat box. A few keys reach further on purpose — F9 still starts recording
+  wherever you are, because the point of it is to record what you are saying
+  about whatever you are looking at.
+- **File ▸ Settings** is new, with a **Keyboard** page: every key, which panel
+  owns it, how far it reaches, and what it does. Any key that will *not* do what
+  its menu says is listed first and in bold — a key quietly taken by another
+  panel is otherwise impossible to work out from the symptom.
+
+### Fixes
+
+- **A creature can no longer be put into a fight on a square the map does not
+  have.** Placing one has always refused an impossible square; joining a fight
+  already standing somewhere did not, so a goblin could be stood outside the
+  room — and every legal move it then tried came back "off the map". It joins
+  the initiative order without a square instead, which is a token you can drag
+  onto the map.
+- **Being cut down on the way somewhere is no longer reported as the square
+  being taken.** Walking out of somebody's reach and falling to their swing said
+  "that square is taken, or something is in the way" about an empty square,
+  contradicting the line above it that said what had actually happened.
+- **A character dropped crossing the room no longer lands the blow.** A turn
+  that walks somewhere and then swings is carried out in two steps, and nothing
+  between them checked whether whoever was holding the axe was still standing.
+
 ## 0.6.1
 
 Fights are run on the map. Whoever is up is selected, Space opens what they can

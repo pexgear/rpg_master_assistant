@@ -15,15 +15,18 @@ from __future__ import annotations
 import logging
 
 import pytest
+from PySide6.QtCore import QUrl
 
 from canon_keeper.bus import Bus
 from canon_keeper.content import Content
 from canon_keeper.net.state import SharedState
 from canon_keeper.panels.table import rolls
+from canon_keeper.panels.table.agent_settings import TRANSLATE_SETTING
 from canon_keeper.panels.table.dice_overlay import FRAMES, AsciiDie, RollDialog
 from canon_keeper.panels.table.widget import TableWidget
 from canon_keeper.plugin import AppContext
 from canon_keeper.repo.entities import KIND_PC
+from canon_keeper_protocol.messages import Member
 
 
 # ------------------------------------------------------------------- reading
@@ -366,3 +369,129 @@ def test_hiding_a_line_takes_its_link_with_it(player_table):
     before = len(widget._roll_prompts)
     widget._redraw()
     assert len(widget._roll_prompts) == before, "redrawing must not double them up"
+
+
+# --------------------------------------------------- offering a line as a turn
+#
+# The same mechanism as a roll prompt -- a mark in the log with an anchor on it
+# -- and the same danger. A mark drawn where clicking it comes back refused
+# teaches people to stop looking at marks.
+
+
+@pytest.fixture
+def dm_table(qtbot, repos):
+    """A DM's Table panel, mid-fight, with the offer turned on."""
+    campaign = repos.campaigns.ensure_default("Translating")
+    repos.settings.set(TRANSLATE_SETTING, "on")
+    shared = SharedState()
+    ctx = AppContext(
+        repos=repos,
+        bus=Bus(),
+        log=logging.getLogger("canonkeeper.test"),
+        campaign_id=campaign.id,
+        role="dm",
+        shared=shared,
+    )
+    widget = TableWidget(ctx)
+    qtbot.addWidget(widget)
+    shared.replace_all(
+        [{"id": 7, "kind": "pc", "name": "Brok", "summary": "", "data": {}}]
+    )
+    widget._client._me = Member(id="dm1", name="The DM", role="dm")
+    widget._client._members = [
+        Member(id="dm1", name="The DM", role="dm"),
+        Member(id="p1", name="Marco", role="player", character="Brok"),
+    ]
+    widget._on_encounter_received(
+        {
+            "running": True,
+            "turn": 3,
+            "combatants": [{"id": 3, "entity": 7}],
+        }
+    )
+    return widget, ctx
+
+
+def test_a_line_from_whoever_is_up_can_be_asked_about(dm_table):
+    widget, _ctx = dm_table
+    widget._append("player", "Brok: I get behind the orc and hit it", said_by="p1")
+    assert "translate:" in widget._log.toHtml()
+
+
+def test_a_line_from_somebody_else_is_not_marked(dm_table):
+    """Their turn is not up, so asking would only come back refused."""
+    widget, _ctx = dm_table
+    widget._client._members.append(
+        Member(id="p2", name="Ada", role="player", character="Ada")
+    )
+    widget._append("player", "Ada: I cover the door", said_by="p2")
+    assert "translate:" not in widget._log.toHtml()
+
+
+def test_nothing_is_offered_outside_a_fight(dm_table):
+    """"Only in combat" is the whole of when a sentence is a turn."""
+    widget, _ctx = dm_table
+    widget._on_encounter_received({})
+    widget._append("player", "Brok: I hit the orc", said_by="p1")
+    assert "translate:" not in widget._log.toHtml()
+
+
+def test_nothing_is_offered_until_the_dm_turns_it_on(dm_table):
+    widget, ctx = dm_table
+    ctx.repos.settings.set(TRANSLATE_SETTING, "off")
+    widget._append("player", "Brok: I hit the orc", said_by="p1")
+    assert "translate:" not in widget._log.toHtml()
+
+
+def test_a_player_never_sees_the_offer(qtbot, repos):
+    """It spends the DM's money and asks in the DM's name."""
+    campaign = repos.campaigns.ensure_default("Translating")
+    repos.settings.set(TRANSLATE_SETTING, "on")
+    shared = SharedState()
+    ctx = AppContext(
+        repos=repos,
+        bus=Bus(),
+        log=logging.getLogger("canonkeeper.test"),
+        campaign_id=campaign.id,
+        role="player",
+        shared=shared,
+    )
+    widget = TableWidget(ctx)
+    qtbot.addWidget(widget)
+    shared.replace_all(
+        [{"id": 7, "kind": "pc", "name": "Brok", "summary": "", "data": {}}]
+    )
+    widget._client._me = Member(id="p1", name="Marco", role="player", character="Brok")
+    widget._client._members = [widget._client._me]
+    widget._on_encounter_received(
+        {"running": True, "turn": 3, "combatants": [{"id": 3, "entity": 7}]}
+    )
+    widget._append("player", "Brok: I hit the orc", said_by="p1")
+    assert "translate:" not in widget._log.toHtml()
+
+
+def test_clicking_it_sends_the_words_and_not_the_name(dm_table):
+    """The agent is being asked what somebody meant.
+
+    The "Brok: " in front is the log's own doing, and sending it back would be
+    handing the model a name it already has as though it were part of the
+    sentence.
+    """
+    widget, _ctx = dm_table
+    sent: list[tuple[str, str]] = []
+    widget._client.send_translate = lambda member, text: (
+        sent.append((member, text)) or True
+    )
+    widget._append("player", "Brok: I get behind the orc and hit it", said_by="p1")
+
+    widget._on_anchor(QUrl("translate:1"))
+
+    assert sent == [("p1", "I get behind the orc and hit it")]
+
+
+def test_redrawing_does_not_double_up_the_offers(dm_table):
+    widget, _ctx = dm_table
+    widget._append("player", "Brok: I hit the orc", said_by="p1")
+    before = len(widget._translations)
+    widget._redraw()
+    assert len(widget._translations) == before

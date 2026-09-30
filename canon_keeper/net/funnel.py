@@ -73,6 +73,11 @@ class Result:
     message: str = ""
     #: Set when the tailnet needs Funnel switched on; the UI offers the link.
     enable_url: str = ""
+    #: Whether the command that publishes was actually run. A failure before it
+    #: ran -- no Tailscale, or Funnel not switched on for the tailnet -- means
+    #: nothing is on the internet. A failure after it ran means something may
+    #: well be, and the caller must keep treating the session as published.
+    attempted: bool = False
 
     @property
     def websocket_url(self) -> str:
@@ -235,7 +240,7 @@ def start(port: int) -> Result:
     if match:
         url = match.group(0)
         log.info("funnel serving port %s at %s", port, url)
-        return Result(True, url=url, message=output)
+        return Result(True, url=url, message=output, attempted=True)
 
     # No address: work out whether it is the not-enabled case after all (an
     # older CLI that reports no capabilities would land here) before giving up.
@@ -250,19 +255,27 @@ def start(port: int) -> Result:
                 "It usually does this when it is waiting for something. What it "
                 "printed:\n\n" + (output or "(nothing)")
             ),
+            # It ran. Whether it got as far as publishing, nobody here knows --
+            # which is exactly the case to assume it did.
+            attempted=True,
         )
 
     if code != 0:
         log.warning("tailscale funnel failed (%s): %s", code, output)
-        return Result(False, message=output or "Tailscale refused to start Funnel.")
+        return Result(
+            False,
+            message=output or "Tailscale refused to start Funnel.",
+            attempted=True,
+        )
 
     fallback = machine_url()
     if fallback:
-        return Result(True, url=fallback, message=output)
+        return Result(True, url=fallback, message=output, attempted=True)
     return Result(
         False,
         message="Funnel started, but Tailscale did not report a public address.\n\n"
         + output,
+        attempted=True,
     )
 
 
@@ -289,3 +302,63 @@ def is_running() -> bool:
         return False
     lowered = output.lower()
     return "https://" in lowered and "no serve config" not in lowered
+
+
+# --------------------------------------------------------- what we left behind
+#
+# `funnel --bg` is configuration in the tailscaled daemon, not a child process.
+# It outlives the app, a crash, and a reboot, and the app cannot tell on its
+# next run that it is there -- so it is written down.
+#
+# Beside the campaigns rather than inside one, because a funnel belongs to the
+# machine. A session published from one campaign and a different campaign opened
+# the next evening is the case a per-campaign note would miss entirely.
+
+
+def _marker() -> Path:
+    from canon_keeper import config
+
+    return config.data_dir() / "published.json"
+
+
+def remember(port: int) -> None:
+    """Note that we asked for a funnel, before the command that does it.
+
+    Before rather than after: the command takes effect in the daemon whether or
+    not we are still here to read its answer.
+    """
+    try:
+        _marker().write_text(
+            json.dumps({"port": int(port)}), encoding="utf-8"
+        )
+    except OSError:
+        # A note we could not write is not a reason to refuse to publish. The
+        # cost is a leftover funnel we cannot attribute, which is what the
+        # situation was before this existed.
+        log.warning("could not write the published marker", exc_info=True)
+
+
+def forget() -> None:
+    """Note that there is nothing of ours published any more."""
+    try:
+        _marker().unlink(missing_ok=True)
+    except OSError:
+        log.warning("could not clear the published marker", exc_info=True)
+
+
+def left_over() -> int | None:
+    """The port a previous run published and never took down, if there is one.
+
+    The marker outliving the funnel is the harmless direction: taking down a
+    funnel that has already gone is a command that succeeds and changes
+    nothing. The other direction is the one this exists to prevent.
+    """
+    try:
+        raw = _marker().read_text(encoding="utf-8")
+    except OSError:
+        return None
+    try:
+        port = json.loads(raw).get("port")
+    except (ValueError, AttributeError):
+        return None
+    return int(port) if isinstance(port, int) else None

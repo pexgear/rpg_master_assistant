@@ -295,6 +295,14 @@ class SessionClient(QObject):
             MessageType.ACTED, id=action_id, accept=bool(accept), note=note
         )
 
+    def send_translate(self, member_id: str, text: str) -> bool:
+        """Ask the agent to write what somebody said as a turn, for the DM.
+
+        Names the speaker rather than their token: which creature they play,
+        and whether it is that creature's turn, are the host's to answer.
+        """
+        return self._send(MessageType.TRANSLATE, member=member_id, text=text)
+
     def send_allow(self, bend_id: str, allow: bool) -> bool:
         """The DM waiving a rule for the agent, or declining to."""
         return self._send(MessageType.ALLOW, id=bend_id, allow=bool(allow))

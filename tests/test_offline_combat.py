@@ -16,6 +16,9 @@ from __future__ import annotations
 import pytest
 
 from canon_keeper.panels.table.widget import TableWidget
+from dataclasses import replace
+
+from canon_keeper_protocol import turns
 from canon_keeper.repo.entities import KIND_NPC, KIND_PC, Entity
 
 
@@ -132,6 +135,32 @@ def test_a_square_off_the_map_is_refused(alone):
     assert "off the map" in said[0]
 
 
+def test_a_refused_walk_is_not_drawn_first(alone):
+    """The walk is sent before the swings, so it has to be refused before that.
+
+    An occupied destination is checked last, by ``place``, and on purpose: it is
+    left out of the route so the answer is "that square is taken" rather than
+    the vaguer "unreachable". But the walk reaches every screen before that
+    check runs, so a token asked onto a taken square was drawn standing there,
+    never moved, and nothing was sent afterwards to put it back. Two creatures
+    running for the same corner is all it takes.
+    """
+    widget, repos, enc, tokens = alone
+    drawn: list[dict] = []
+    widget._ctx.bus.play.connect(drawn.append)
+    said: list[str] = []
+    widget._ctx.bus.status_message.connect(said.append)
+
+    # Straight onto the square the goblin is standing on.
+    widget._on_turn_taken({"combatant": tokens["hero"].id, "move": [1, 0]})
+
+    assert not drawn, f"a walk that never happened was animated: {drawn}"
+    assert said, "the refusal passed silently"
+    assert "taken" in said[0]
+    hero = repos.encounters.combatant(tokens["hero"].id)
+    assert (hero.x, hero.y) == (0, 0), "and it did not move"
+
+
 def test_swinging_costs_the_other_creature_hit_points(alone):
     """Dice, armour class and hit points, with nobody connected to roll for."""
     widget, repos, enc, tokens = alone
@@ -209,3 +238,313 @@ def test_going_online_retires_the_lone_referee(alone):
     widget._alone = None
 
     assert widget._referee() is widget._server
+
+
+# ------------------------------------------------ what became of a staged turn
+#
+# The Combat panel holds a turn until it hears. That only works if the host's
+# answer gets back to it, which is one bus signal and the reason this is tested
+# here rather than in the panel: the panel can be handed the signal, but nothing
+# else proves anybody sends it.
+
+
+def test_a_turn_that_went_through_is_reported_as_such(alone, qtbot):
+    widget, repos, _enc, tokens = alone
+    settled: list[tuple] = []
+    widget._ctx.bus.turn_settled.connect(lambda ok, why: settled.append((ok, why)))
+
+    widget._on_turn_taken({"combatant": tokens["hero"].id, "move": [0, 1]})
+
+    assert settled == [(True, "")]
+    assert repos.encounters.combatant(tokens["hero"].id).y == 1
+
+
+def test_a_refused_turn_is_reported_with_the_reason(alone, qtbot):
+    """So the panel can keep it staged and say what to change.
+
+    Walking onto the goblin is refused because the square is taken -- the sort of
+    refusal that means "one square over", which is exactly why throwing the
+    staged turn away would be the wrong answer.
+    """
+    widget, repos, _enc, tokens = alone
+    settled: list[tuple] = []
+    widget._ctx.bus.turn_settled.connect(lambda ok, why: settled.append((ok, why)))
+
+    goblin = repos.encounters.combatant(tokens["goblin"].id)
+    widget._on_turn_taken(
+        {"combatant": tokens["hero"].id, "move": [goblin.x, goblin.y]}
+    )
+
+    assert settled and settled[0][0] is False
+    assert settled[0][1], "refused with no reason to show anybody"
+    assert repos.encounters.combatant(tokens["hero"].id).x == 0, "it moved anyway"
+
+
+# ------------------------------------------------------- a turn as a sequence
+#
+# "Three squares, swing, three more" is the thing the turn budget was built for
+# -- migration 009 says so in as many words -- and the thing no caller could
+# express, because a turn carried one move and one attack in that order.
+
+
+def _steps_speed(widget, tokens):
+    referee = widget._referee()
+    entity = referee._entity_of(tokens["hero"].id)
+    return referee.movement_left(entity)
+
+
+def test_a_turn_can_split_its_movement_around_the_action(alone):
+    """The whole point of steps. Walk, swing, walk on."""
+    widget, repos, enc, tokens = alone
+    referee = widget._referee()
+
+    reason, done = referee.take_turn_steps(
+        tokens["hero"].id,
+        [
+            turns.a_move(0, 1),
+            turns.a_swing(tokens["goblin"].id, "battleaxe"),
+            turns.a_move(0, 3),
+        ],
+    )
+
+    assert reason == "", reason
+    assert done == 3
+    walker = repos.encounters.combatant(tokens["hero"].id)
+    assert (walker.x, walker.y) == (0, 3), "it did not walk on after swinging"
+    # That the swing was *resolved*, not that it landed. Hit points would make
+    # this a test of a d20: dice here are SystemRandom and cannot be seeded, so
+    # asserting damage passes until the first miss and then looks like a bug in
+    # the sequence.
+    assert repos.encounters.get(enc.id).attacks_made == 1, (
+        "the swing in the middle never happened"
+    )
+
+
+def test_a_turn_that_stops_halfway_says_how_far_it_got(alone):
+    """Because the part that happened cannot be asked for again.
+
+    Three squares and then a swing out of reach is three squares spent. Whoever
+    is holding the turn has to know to stop holding those three, or committing it
+    a second time walks them twice.
+    """
+    widget, repos, _enc, tokens = alone
+    referee = widget._referee()
+
+    goblin = repos.encounters.combatant(tokens["goblin"].id)
+    reason, done = referee.take_turn_steps(
+        tokens["hero"].id,
+        [turns.a_move(0, 1), turns.a_move(goblin.x, goblin.y)],
+    )
+
+    assert done == 1, "it did not report the move that went through"
+    assert reason, "it stopped for no stated reason"
+    walker = repos.encounters.combatant(tokens["hero"].id)
+    assert (walker.x, walker.y) == (0, 1), "the part that happened was undone"
+
+
+def test_movement_is_measured_from_where_they_are_now(alone):
+    """Not from where the turn started. Two steps share one allowance.
+
+    The bug this forecloses is the one that keeps recurring in a different
+    costume: state read once at the top and then relied on after it changed.
+    """
+    widget, repos, _enc, tokens = alone
+    referee = widget._referee()
+
+    # Each of these is inside the allowance; together they are twice it. On a
+    # 12x12 the map runs -6..5, so both squares exist.
+    reason, done = referee.take_turn_steps(
+        tokens["hero"].id,
+        [turns.a_move(0, 5), turns.a_move(5, 5)],
+    )
+
+    assert done == 1, "the second move was not measured against what was left"
+    assert reason
+    walker = repos.encounters.combatant(tokens["hero"].id)
+    assert (walker.x, walker.y) == (0, 5)
+
+
+def test_the_old_shorthand_still_works(alone):
+    """Every caller older than steps spells a turn as one move and one attack."""
+    widget, repos, _enc, tokens = alone
+
+    assert widget._referee().take_turn(tokens["hero"].id, move=[0, 1]) == ""
+    assert repos.encounters.combatant(tokens["hero"].id).y == 1
+
+
+def test_one_action_a_turn_holds_across_steps(alone):
+    """The budget is the turn's, not the step's.
+
+    Two swings in one sequence is still two swings in one turn, and the second
+    is refused by the same rule that refuses it from any other door.
+    """
+    widget, _repos, _enc, tokens = alone
+    referee = widget._referee()
+
+    reason, done = referee.take_turn_steps(
+        tokens["hero"].id,
+        [
+            turns.a_swing(tokens["goblin"].id, "battleaxe"),
+            turns.a_swing(tokens["goblin"].id, "battleaxe"),
+        ],
+    )
+
+    assert done == 1
+    assert reason, "a second action in one turn went unremarked"
+
+
+# ------------------------------------------------- what the action was spent on
+#
+# `action_used` is a flag, and a flag can only say the action is gone. Extra
+# Attack needs to know how many swings it produced; Dash needs to know it went on
+# moving rather than on swinging. Neither is a thing a flag distinguishes.
+
+
+def _level(repos, tokens, level: int) -> None:
+    combatant = repos.encounters.combatant(tokens["hero"].id)
+    entity = repos.entities.get(combatant.entity_id)
+    data = dict(entity.data or {})
+    sheet = dict(data.get("sheet") or {})
+    sheet["level"] = level
+    data["sheet"] = sheet
+    repos.entities.update(replace(entity, data=data))
+
+
+def test_a_fighter_at_level_five_gets_two_swings(alone):
+    """The gap the boolean created: a second swing looked like a second action.
+
+    The count comes off the SRD's own level table -- `extra_attacks` on the level
+    row -- so this file knows nothing about fighters.
+    """
+    widget, repos, _enc, tokens = alone
+    _level(repos, tokens, 5)
+    referee = widget._referee()
+
+    reason, done = referee.take_turn_steps(
+        tokens["hero"].id,
+        [
+            turns.a_swing(tokens["goblin"].id, "battleaxe"),
+            turns.a_swing(tokens["goblin"].id, "battleaxe"),
+        ],
+    )
+
+    assert reason == "", reason
+    assert done == 2, "the second swing out of one action was refused"
+
+
+def test_a_third_swing_is_still_refused_at_level_five(alone):
+    """Two, not unlimited. The rule moved, it did not go away."""
+    widget, repos, _enc, tokens = alone
+    _level(repos, tokens, 5)
+    referee = widget._referee()
+
+    reason, done = referee.take_turn_steps(
+        tokens["hero"].id,
+        [turns.a_swing(tokens["goblin"].id, "battleaxe")] * 3,
+    )
+
+    assert done == 2
+    assert "all 2 attacks" in reason, reason
+
+
+def test_a_fighter_at_level_three_still_gets_one(alone):
+    """The fixture's own level. Nothing changed for creatures without the feature."""
+    widget, _repos, _enc, tokens = alone
+    referee = widget._referee()
+
+    reason, done = referee.take_turn_steps(
+        tokens["hero"].id,
+        [turns.a_swing(tokens["goblin"].id, "battleaxe")] * 2,
+    )
+
+    assert done == 1
+    assert "already acted" in reason, reason
+
+
+def test_dashing_buys_your_speed_again(alone):
+    """Spend the action on moving, and the allowance doubles."""
+    widget, repos, _enc, tokens = alone
+    referee = widget._referee()
+    entity = referee._entity_of(tokens["hero"].id)
+    speed = referee.movement_left(entity)
+
+    reason, done = referee.take_turn_steps(tokens["hero"].id, [turns.a_dash()])
+
+    assert reason == "", reason
+    assert done == 1
+    assert referee.movement_left(entity) == speed * 2
+    assert repos.encounters.get(_enc.id).dashed is True
+
+
+def test_dashing_twice_is_refused(alone):
+    """It costs the action, and there is one of those."""
+    widget, _repos, _enc, tokens = alone
+    referee = widget._referee()
+
+    reason, done = referee.take_turn_steps(
+        tokens["hero"].id, [turns.a_dash(), turns.a_dash()]
+    )
+
+    assert done == 1
+    assert "action" in reason, reason
+
+
+def test_a_swing_spends_the_action_that_dashing_needed(alone):
+    """Both want the same action, and only one of them can have it."""
+    widget, _repos, _enc, tokens = alone
+    referee = widget._referee()
+
+    reason, done = referee.take_turn_steps(
+        tokens["hero"].id,
+        [turns.a_swing(tokens["goblin"].id, "battleaxe"), turns.a_dash()],
+    )
+
+    assert done == 1
+    assert reason, "dashing after swinging bought a second action"
+
+
+def test_the_turn_budget_is_cleared_when_the_turn_passes(alone):
+    """All of it, together. A counter that outlives its turn is read once."""
+    widget, repos, enc, tokens = alone
+    referee = widget._referee()
+    referee.take_turn_steps(
+        tokens["hero"].id,
+        [turns.a_dash(), turns.a_swing(tokens["goblin"].id, "battleaxe")],
+    )
+    spent = repos.encounters.get(enc.id)
+    assert spent.dashed is True and spent.attacks_made == 1
+
+    referee.run_turn("next")
+
+    fresh = repos.encounters.get(enc.id)
+    assert fresh.dashed is False
+    assert fresh.attacks_made == 0
+    assert fresh.action_used is False
+    assert fresh.moved_squares == 0
+
+
+def test_how_much_of_a_turn_happened_is_reported(alone):
+    """Not just that it stopped -- where. The panel drops that much.
+
+    Otherwise pressing Do it again walks the squares that were already walked,
+    which is the one thing keeping a refused turn staged must not cost.
+    """
+    widget, repos, _enc, tokens = alone
+    settled: list[tuple] = []
+    widget._ctx.bus.turn_settled.connect(
+        lambda ok, why, done: settled.append((ok, why, done))
+    )
+    goblin = repos.encounters.combatant(tokens["goblin"].id)
+
+    widget._on_turn_taken(
+        {
+            "combatant": tokens["hero"].id,
+            "steps": [turns.a_move(0, 1), turns.a_move(goblin.x, goblin.y)],
+        }
+    )
+
+    assert settled, "nothing was reported at all"
+    went_through, why_not, done = settled[0]
+    assert went_through is False
+    assert why_not
+    assert done == 1, "the move that happened was not counted"
