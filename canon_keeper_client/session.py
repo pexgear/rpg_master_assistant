@@ -72,6 +72,11 @@ class Table:
     #: none. An agent running a combat needs to know where everybody is.
     encounter: dict = field(default_factory=dict)
 
+    #: How many lines have ever been remembered, not how many are kept. It is
+    #: the watermark a reader keeps: "everything after 41" survives lines being
+    #: dropped off the front, which a position in the list would not.
+    said_so_far: int = 0
+
     #: Deep enough to hold an evening's exchange rather than the last thing
     #: anybody said. Lines arrive in bursts -- three people typing at once are
     #: three messages in two seconds -- so a short window routinely cuts off the
@@ -96,8 +101,10 @@ class Table:
         hear it -- it is direction, not dialogue, and repeating it back to them
         word for word would be the one thing it must not do with it.
         """
+        self.said_so_far += 1
         self.recent.append(
             {
+                "seq": self.said_so_far,
                 "speaker": speaker,
                 "role": role,
                 "text": text,
@@ -196,6 +203,17 @@ class AgentSession:
         #: the pause the rest of a turn waits for.
         self._on_translate = on_translate
         self._socket: Any = None
+        #: The loop the socket lives on, once `run` has started. None before.
+        self.loop: asyncio.AbstractEventLoop | None = None
+        #: Set whenever something a seat might care about arrives. Created on
+        #: the session's loop, so anything waiting on it waits through
+        #: `on_my_loop`.
+        self.something_happened: asyncio.Event | None = None
+        #: The turn put to this seat and not yet answered, or None. Held rather
+        #: than only passed to a callback, because a client that answers in a
+        #: later call than the one it heard about it in -- a tool server, where
+        #: reading and answering are two calls -- has nowhere else to keep it.
+        self.offered: dict | None = None
         self.table = Table()
         #: Set every time the host tells us what the fight looks like. A tool
         #: that has just asked for a change waits on this rather than guessing
@@ -206,6 +224,13 @@ class AgentSession:
 
     async def run(self) -> None:
         """Connect and pump messages until the connection closes."""
+        # Written down because the socket belongs to *this* loop and callers may
+        # not be on it. A tool server runs its own loop in another thread and
+        # reaches in here; sending on a socket from a foreign loop is undefined
+        # rather than merely slow. `on_my_loop` is how anything outside gets a
+        # message sent safely.
+        self.loop = asyncio.get_running_loop()
+        self.something_happened = asyncio.Event()
         async with websockets.connect(
             self._url,
             max_size=MAX_HOST_FRAME_BYTES,
@@ -312,9 +337,27 @@ class AgentSession:
         stand-in answers its own character's turns and no others -- the host
         checks that rather than trusting it.
         """
+        if self.offered and self.offered.get("id") == action_id:
+            # Answered, so it is no longer on offer. The host says so too, with
+            # ACTION_GONE, but not before the next thing that asks.
+            self.offered = None
         return await self.ask(
             MessageType.ACTED, id=action_id, accept=accept, note=note
         )
+
+    async def death_save(self) -> bool:
+        """Roll the death save this seat owes.
+
+        Carries nothing. The host already knows which character this login plays
+        and whether one is owed; a client that named its own would be a client
+        choosing when to make one.
+
+        The host rolls it anyway when the clock runs out, so this is not the
+        difference between dying and not. It is the difference between making
+        your own death save and watching a number change in a list, which at a
+        table is most of what a death save is.
+        """
+        return await self.ask(MessageType.DEATH_SAVE)
 
     async def turn_done(self) -> bool:
         """"That is my turn." The one way a seat may pass the turn on.
@@ -429,8 +472,39 @@ class AgentSession:
 
     # ---------------------------------------------------------------- dispatch
 
+    def _stir(self) -> None:
+        """Wake anything waiting for the table to change.
+
+        Set and immediately cleared rather than left set: a waiter that arrives
+        later wants the *next* thing to happen, not to be told instantly about
+        one it has already read.
+        """
+        if self.something_happened is not None:
+            self.something_happened.set()
+            self.something_happened.clear()
+
+    async def on_my_loop(self, make_coro):
+        """Run a coroutine on the loop that owns the socket, from anywhere.
+
+        ``make_coro`` is called rather than passed as a coroutine, because a
+        coroutine object created on one loop and awaited on another is exactly
+        the mistake this exists to prevent.
+
+        On the session's own loop this is a plain await, so the single-loop case
+        -- which is every test -- costs nothing and behaves identically.
+        """
+        loop = self.loop
+        if loop is None:
+            raise RuntimeError("the session is not running")
+        if loop is asyncio.get_running_loop():
+            return await make_coro()
+        return await asyncio.wrap_future(
+            asyncio.run_coroutine_threadsafe(make_coro(), loop)
+        )
+
     async def _dispatch(self, message: Message) -> None:
         table = self.table
+        self._stir()
 
         if message.type == MessageType.WELCOME:
             table.campaign = str(message.get("campaign", ""))
@@ -519,10 +593,38 @@ class AgentSession:
                 at=message.ts,
             )
 
+        elif message.type == MessageType.SYSTEM:
+            # Where a fight actually *happens*. Every result the host announces
+            # -- a swing and what it rolled, somebody going down, a death save
+            # asked for, an opportunity attack -- is a system line, and a seat
+            # that ignored them could act and never learn what came of it.
+            #
+            # Kept in the same transcript as speech, because to a reader they
+            # are one stream: "Brok swings at Yeemik" and "I told you to run"
+            # belong in the order they happened.
+            text = str(message.get("text", ""))
+            if text:
+                table.remember(
+                    "(the table)",
+                    str(message.get("kind", "") or "system"),
+                    text,
+                    at=message.ts,
+                )
+
         elif message.type == MessageType.ACTION:
             # `watching` is the DM's copy: something to see, not to answer.
-            if not message.get("watching") and self._on_action is not None:
-                await self._on_action(self, dict(message.payload))
+            if not message.get("watching"):
+                self.offered = dict(message.payload)
+                if self._on_action is not None:
+                    await self._on_action(self, dict(message.payload))
+
+        elif message.type == MessageType.ACTION_GONE:
+            # Answered, withdrawn, or overtaken by a newer one. Kept track of
+            # because a client that *holds* the offer between calls -- the MCP
+            # seat does -- would otherwise go on offering to answer a turn
+            # nobody is waiting on, and answer it into silence.
+            if self.offered and self.offered.get("id") == message.get("id"):
+                self.offered = None
 
         elif message.type == MessageType.TRANSLATE_THIS:
             if self._on_translate is not None:

@@ -5,6 +5,36 @@ What changed, from the point of view of someone running a game. See
 
 ## Unreleased
 
+## 0.6.3
+
+A player's seat can be played by something other than a person.
+
+### A whole fight through the MCP
+
+The MCP seat could read your game and say things in it. It could not take a
+turn, which meant an agent holding a player's login sat through its own turn.
+It can now play a fight from beginning to end — and it plays it the way a person
+does, because it sends the same messages the buttons send.
+
+- **It is told when something happens.** `wait_for_update` waits for your turn
+  coming round, somebody speaking, a roll — instead of asking "anything yet?" in
+  a loop. `read_pending` says what is new since the last read, and only moves its
+  place when you read, so catching up late misses nothing.
+- **It can answer the turn put to it.** `the_turn_on_offer` reads what somebody
+  worked out for your character; `answer_a_proposal` accepts it — which is what
+  makes it happen — or refuses it with a note saying what you meant instead.
+- **It can say it is finished**, with `finish_my_turn`. Which is not passing the
+  turn on: that is still the DM's.
+- **It can make its own death save.** The host still rolls it when the clock runs
+  out, so this is not the difference between dying and not — it is the difference
+  between making your own and watching a number change in a list.
+- **It hears what happened.** Every result the host announces — a swing and what
+  it rolled, somebody going down, a save asked for — reaches the seat now. It
+  used to be able to act and never learn what came of it.
+
+None of this moves a token or decides a number, and none of it is a privileged
+path. A player does not move their own token in the app either.
+
 ## 0.6.2
 
 The map stands up, and a turn is something you line up before it happens.

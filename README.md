@@ -714,6 +714,27 @@ the host. `update_my_character` is a **request** — it returns "sent to your DM
 because that is what happened. There is no privileged path, which is why a bug
 in it cannot corrupt a campaign.
 
+**A seat can play a whole fight, not only watch one.** That is the difference
+between a client that reads your game and one that sits at your table:
+
+- `wait_for_update` waits until something happens — your turn coming round,
+  somebody speaking, a roll — instead of asking "anything yet?" in a loop.
+  `read_pending` says what is new since you last read, and only moves its place
+  when you call it, so reading late misses nothing.
+- `the_turn_on_offer` is the turn somebody worked out for your character and put
+  to you, in words. `answer_a_proposal` accepts it — which is what makes it
+  happen — or refuses it with a note saying what you meant instead.
+- `finish_my_turn` says you are done, which is not the same as passing the turn:
+  that is still the DM's.
+- `roll_my_death_save` is yours to make when you are at nought. The host rolls it
+  for you when the clock runs out either way, so this is not the difference
+  between dying and not — it is the difference between making your own death
+  save and watching a number change in a list.
+
+Nothing there moves a token or decides a number. A player does not move their own
+token in the app either: they say what they mean, somebody works it out in rules,
+and they accept it. The seat plays the same game the same way.
+
 The caveat worth reading first: whatever model your MCP client runs will see
 what that login sees. For a player, that is what you shared with them. Point it
 at a DM login and you have sent your campaign's secrets to whoever runs that

@@ -12,6 +12,7 @@ and an edit that comes back as "sent to your DM" rather than "done".
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 
 import pytest
 
@@ -102,6 +103,15 @@ def test_the_server_advertises_its_tools(qapp, hosted):
         "say",
         "roll",
         "update_my_character",
+        # Enough to *play* a seat, not only to watch one. Reading the table and
+        # saying things is a spectator; a player also has to be told something
+        # happened, answer the turn put to them, and say when they are done.
+        "read_pending",
+        "wait_for_update",
+        "the_turn_on_offer",
+        "answer_a_proposal",
+        "roll_my_death_save",
+        "finish_my_turn",
     }
 
 
@@ -273,3 +283,221 @@ def _spin(qapp, coro, timeout=20.0):
 
             loop.run_until_complete(drain())
         loop.close()
+
+
+# ------------------------------------------- a whole fight, from the seat
+#
+# The claim these make together: an agent holding one player's login can play a
+# combat from beginning to end through these tools and nothing else. Not "can
+# read a fight" -- can *play* one. Every step below is a thing a person does at
+# the table, and each was unreachable from a seat until it had a tool.
+#
+# The DM stays where they are: Canon Keeper and autopilot. Nothing here needs a
+# second privileged path, because every tool is an ordinary message the host
+# checks exactly as it checks the app's.
+
+
+def _fight_with(repos, campaign, hero, server, *, hp=12):
+    """A begun fight with the player's character up first."""
+    goblin = repos.entities.create(
+        Entity(
+            id=None,
+            campaign_id=campaign.id,
+            kind=KIND_NPC,
+            name="Yeemik",
+            data={"hp": 7, "max_hp": 7, "sheet": {"schema": 1, "level": 1}},
+        )
+    )
+    enc = repos.encounters.create(campaign.id, "The cave", width=12, height=12)
+    tokens = {
+        "hero": repos.encounters.add(enc.id, hero.id, initiative=20, x=0, y=0),
+        "goblin": repos.encounters.add(enc.id, goblin.id, initiative=5, x=1, y=0),
+    }
+    repos.encounters.begin(enc.id)
+    server.publish_encounter()
+    return enc, tokens
+
+
+def test_a_seat_is_told_its_turn_came_round(qapp, hosted, repos):
+    """Without this a seat can only poll and compare, which is not playing."""
+    server, campaign, elara, _villain = hosted
+    _fight_with(repos, campaign, elara, server)
+
+    async def go():
+        tools = await _seat(server, "marco", "goblin-teeth")
+        tools.read_pending()  # start from now
+        server._broadcast_system("It is Elara's turn.")
+        return await tools.wait_for_update(5.0)
+
+    news = _spin(qapp, go())
+    assert news["said"], "nothing came back from waiting"
+    assert any("Elara" in line["text"] for line in news["said"])
+    assert news["whose_turn"] == "Elara"
+
+
+def test_waiting_returns_at_once_when_something_is_already_unread(qapp, hosted, repos):
+    """Waiting for the *next* thing while holding an unread one misses turns."""
+    server, campaign, elara, _villain = hosted
+    _fight_with(repos, campaign, elara, server)
+
+    async def go():
+        tools = await _seat(server, "marco", "goblin-teeth")
+        tools.read_pending()
+        server._broadcast_system("Something happened.")
+        await asyncio.sleep(0.3)
+        return await tools.wait_for_update(30.0)
+
+    news = _spin(qapp, go())
+    assert news["waited"] == 0.0, "it waited for a thing it had already been told"
+    assert news["said"]
+
+
+def test_reading_twice_does_not_say_it_twice(qapp, hosted, repos):
+    """The watermark moves when it is read, so a catch-up is not a re-read."""
+    server, campaign, elara, _villain = hosted
+    _fight_with(repos, campaign, elara, server)
+
+    async def go():
+        tools = await _seat(server, "marco", "goblin-teeth")
+        tools.read_pending()
+        server._broadcast_system("Once.")
+        await asyncio.sleep(0.3)
+        return tools.read_pending(), tools.read_pending()
+
+    first, second = _spin(qapp, go())
+    assert any("Once." in line["text"] for line in first["said"])
+    assert second["said"] == []
+
+
+def test_a_seat_plays_a_whole_turn_and_the_host_rolls_it(qapp, hosted, repos):
+    """Say it, read what was worked out, accept it, and be done.
+
+    The loop a player actually goes round, with no step of it left to the app.
+    """
+    server, campaign, elara, _villain = hosted
+    _enc, tokens = _fight_with(repos, campaign, elara, server)
+
+    async def go():
+        tools = await _seat(server, "marco", "goblin-teeth")
+        tools.read_pending()
+
+        # 1. The player says what they mean to do.
+        await tools.say("I step up and swing at the goblin.")
+        await asyncio.sleep(0.3)
+
+        # 2. The DM -- or autopilot -- works that out in rules and puts it back.
+        assert server.offer_turn(tokens["hero"].id, move=[1, 1]) == ""
+        await asyncio.sleep(0.4)
+
+        # 3. The seat reads what is on offer, in words.
+        offered = tools.the_turn_on_offer()
+
+        # 4. And accepts it. Only now does anything move.
+        said = await tools.answer_a_proposal(True)
+        await asyncio.sleep(0.5)
+
+        # 5. And says it is finished.
+        done = await tools.finish_my_turn()
+        await asyncio.sleep(0.3)
+        return offered, said, done
+
+    offered, said, done = _spin(qapp, go())
+    assert offered["waiting"] is True
+    assert "1,1" in offered["what_it_would_do"], offered
+    assert "Accepted" in said
+    assert "done" in done.lower()
+    moved = repos.encounters.combatant(tokens["hero"].id)
+    assert (moved.x, moved.y) == (1, 1), "accepting did not make it happen"
+
+
+def test_a_seat_can_refuse_and_say_what_it_meant_instead(qapp, hosted, repos):
+    """The difference between "no" and "no, I go round the other side"."""
+    server, campaign, elara, _villain = hosted
+    _enc, tokens = _fight_with(repos, campaign, elara, server)
+
+    async def go():
+        tools = await _seat(server, "marco", "goblin-teeth")
+        assert server.offer_turn(tokens["hero"].id, move=[1, 1]) == ""
+        await asyncio.sleep(0.4)
+        said = await tools.answer_a_proposal(False, "I stay back and watch the door.")
+        await asyncio.sleep(0.4)
+        return said, tools.the_turn_on_offer()
+
+    said, after = _spin(qapp, go())
+    assert "Refused" in said and "door" in said
+    assert after["waiting"] is False, "a refused turn was still on offer"
+    assert repos.encounters.combatant(tokens["hero"].id).x == 0, "it moved anyway"
+
+
+def test_answering_nothing_says_so_rather_than_answering_into_silence(qapp, hosted, repos):
+    server, campaign, elara, _villain = hosted
+    _fight_with(repos, campaign, elara, server)
+
+    async def go():
+        tools = await _seat(server, "marco", "goblin-teeth")
+        return await tools.answer_a_proposal(True)
+
+    said = _spin(qapp, go())
+    assert "no turn waiting" in said.lower()
+
+
+def test_a_withdrawn_offer_stops_being_on_offer(qapp, hosted, repos):
+    """An offer can be taken back between reading it and answering it.
+
+    A seat that held the first one would answer a turn nobody is waiting on.
+    """
+    server, campaign, elara, _villain = hosted
+    _enc, tokens = _fight_with(repos, campaign, elara, server)
+
+    async def go():
+        tools = await _seat(server, "marco", "goblin-teeth")
+        assert server.offer_turn(tokens["hero"].id, move=[1, 1]) == ""
+        await asyncio.sleep(0.4)
+        before = tools.the_turn_on_offer()
+        server._withdraw_for(tokens["hero"].id)
+        await asyncio.sleep(0.4)
+        return before, tools.the_turn_on_offer()
+
+    before, after = _spin(qapp, go())
+    assert before["waiting"] is True
+    assert after["waiting"] is False
+
+
+def test_a_seat_can_make_its_own_death_save(qapp, hosted, repos):
+    """The loudest moment the game has, and it was the host's to roll alone.
+
+    The host still rolls it when the clock runs out, so this is not the
+    difference between dying and not. It is the difference between making your
+    own death save and watching a number change in a list.
+    """
+    server, campaign, elara, _villain = hosted
+    _enc, tokens = _fight_with(repos, campaign, elara, server)
+
+    async def go():
+        tools = await _seat(server, "marco", "goblin-teeth")
+        # Down, and *owed* a save -- which is not the same as being down. The
+        # host owes one when the turn lands on a dying character, and refuses a
+        # save nobody asked for, so the turn is passed round rather than the
+        # flag being set by hand.
+        repos.entities.update(
+            replace(
+                repos.entities.get(elara.id),
+                data={**(repos.entities.get(elara.id).data or {}), "hp": 0},
+            )
+        )
+        repos.encounters.set_down(tokens["hero"].id, True)
+        server.run_turn("next")   # on to the goblin
+        server.run_turn("next")   # and round to Elara, who is dying
+        server.publish_encounter()
+        await asyncio.sleep(0.4)
+        seen = tools.the_fight()
+        said = await tools.roll_my_death_save()
+        await asyncio.sleep(0.4)
+        return seen, said
+
+    seen, said = _spin(qapp, go())
+    mine = next(c for c in seen["standing"] if c["who"] == "Elara")
+    assert mine["down"] is True, "a seat could not tell it was dying"
+    assert "Rolled" in said
+    after = repos.encounters.combatant(tokens["hero"].id)
+    assert (after.death_successes + after.death_failures) >= 1, "nothing was rolled"

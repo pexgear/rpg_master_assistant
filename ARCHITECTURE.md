@@ -380,6 +380,28 @@ say something, and nothing happens.
 MCP tools. `roll` is rolled on the host; `update_my_character` returns "sent to
 your DM", because that is what happened.
 
+**A seat can play a fight, not only read one**, which needs the other direction:
+a tool server answers questions and is never told anything. `wait_for_update`
+blocks until the table changes and `read_pending` says what changed since the
+caller last asked, with a watermark that moves only on reading — so a seat that
+reads late misses nothing, while the bounded transcript means one that reads very
+late is told how much fell off the front. On top of that, the turn a player
+actually takes: `the_turn_on_offer`, `answer_a_proposal`, `finish_my_turn`,
+`roll_my_death_save`.
+
+Two things the seat needs that a callback-shaped client did not. It **holds the
+offered turn** (`AgentSession.offered`), because reading it and answering it are
+two calls — and clears it on `ACTION_GONE`, or a withdrawn offer would be
+answered into silence. And it **remembers system lines**: every result the host
+announces is a `SYSTEM` broadcast, so a client that ignored them could act and
+never learn what came of it.
+
+The socket belongs to the session's loop and the tools run on the server's, in
+another thread. `AgentSession.on_my_loop` marshals every write onto the right
+one. On a single loop it is a plain await, which is why the tests — which run
+everything on one loop — cannot see the difference, and why the crossing has to
+be written down rather than discovered.
+
 ---
 
 ## Combat
