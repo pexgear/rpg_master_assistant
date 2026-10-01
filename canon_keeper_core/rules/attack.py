@@ -23,8 +23,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from canon_keeper.rules import derive
-from canon_keeper.rules.sheet import is_sheet
+from canon_keeper_core.rules import derive
+from canon_keeper_core.rules.sheet import is_sheet
 
 #: A natural twenty always hits and doubles the dice; a natural one always
 #: misses. The two rules everyone at every table knows.

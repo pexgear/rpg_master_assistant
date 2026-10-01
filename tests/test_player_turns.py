@@ -22,7 +22,7 @@ import pytest
 
 from canon_keeper.net.client import SessionClient
 from canon_keeper.net.server import SessionServer
-from canon_keeper.repo.entities import KIND_NPC, KIND_PC, Entity
+from canon_keeper_core.repo.entities import KIND_NPC, KIND_PC, Entity
 
 SHEET = {
     "schema": 1,

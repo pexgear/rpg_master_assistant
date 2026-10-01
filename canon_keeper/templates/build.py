@@ -17,9 +17,9 @@ import time
 from pathlib import Path
 
 from canon_keeper import campaigns
-from canon_keeper.db import connect, migrate
-from canon_keeper.repo import Repos
-from canon_keeper.repo.entities import Entity
+from canon_keeper_core.db import connect, migrate
+from canon_keeper_core.repo import Repos
+from canon_keeper_core.repo.entities import Entity
 from canon_keeper.templates import (
     PROGRESS_SETTING,
     SOURCE_SETTING,

@@ -18,14 +18,14 @@ import pytest
 from PySide6.QtCore import QUrl
 
 from canon_keeper.bus import Bus
-from canon_keeper.content import Content
+from canon_keeper_core.content import Content
 from canon_keeper.net.state import SharedState
 from canon_keeper.panels.table import rolls
 from canon_keeper.panels.table.agent_settings import TRANSLATE_SETTING
 from canon_keeper.panels.table.dice_overlay import FRAMES, AsciiDie, RollDialog
 from canon_keeper.panels.table.widget import TableWidget
 from canon_keeper.plugin import AppContext
-from canon_keeper.repo.entities import KIND_PC
+from canon_keeper_core.repo.entities import KIND_PC
 from canon_keeper_protocol.messages import Member
 
 

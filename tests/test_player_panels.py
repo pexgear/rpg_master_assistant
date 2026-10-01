@@ -18,7 +18,7 @@ from canon_keeper.panels.characters.widget import CharactersWidget
 from canon_keeper.panels.cities import CitiesPanel, PlayerCitiesWidget
 from canon_keeper.panels.cities.widget import CitiesWidget
 from canon_keeper.plugin import AppContext
-from canon_keeper.repo.entities import KIND_LOCATION, KIND_NPC, KIND_PC
+from canon_keeper_core.repo.entities import KIND_LOCATION, KIND_NPC, KIND_PC
 
 
 @pytest.fixture

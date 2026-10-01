@@ -7,7 +7,7 @@ import pytest
 from canon_keeper.audio import transcribe
 from canon_keeper.audio.dictation import Dictation
 from canon_keeper.panels.table.widget import TableWidget
-from canon_keeper.repo.entities import KIND_LOCATION, KIND_NPC, Entity
+from canon_keeper_core.repo.entities import KIND_LOCATION, KIND_NPC, Entity
 
 
 @pytest.fixture

@@ -32,10 +32,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from canon_keeper.content import Content
-from canon_keeper.rules import derive
-from canon_keeper.rules.sheet import ABILITIES, ABILITY_NAMES, new_sheet, sheet_of
-from canon_keeper.rules.validation import validate
+from canon_keeper_core.content import Content
+from canon_keeper_core.rules import derive
+from canon_keeper_core.rules.sheet import ABILITIES, ABILITY_NAMES, new_sheet, sheet_of
+from canon_keeper_core.rules.validation import validate
 
 _NONE = "(none)"
 

@@ -49,10 +49,10 @@ from canon_keeper.panels.encounter.grid import (
 from canon_keeper.panels.encounter.view3d import MapView
 from canon_keeper import entity_actions
 from canon_keeper.plugin import AppContext, PanelAction, ReservedKey
-from canon_keeper.repo.encounters import Encounter
-from canon_keeper.repo.entities import KIND_NPC, KIND_PC
+from canon_keeper_core.repo.encounters import Encounter
+from canon_keeper_core.repo.entities import KIND_NPC, KIND_PC
 from canon_keeper import campaigns
-from canon_keeper.rules import death
+from canon_keeper_core.rules import death
 from canon_keeper_protocol import robots, turns
 
 
@@ -589,7 +589,7 @@ class EncounterWidget(QWidget):
             return 0
         entity = self._entities.get(combatant.entity_id)
         sheet = (getattr(entity, "data", None) or {}).get("sheet") or {}
-        from canon_keeper.rules import derive
+        from canon_keeper_core.rules import derive
 
         try:
             speed = derive.speed_in_squares(sheet, self._content_for_rules())
@@ -1007,7 +1007,7 @@ class EncounterWidget(QWidget):
     def _weapons_of(self, combatant) -> list[str]:
         entity = self._entities.get(combatant.entity_id)
         sheet = (getattr(entity, "data", None) or {}).get("sheet") or {}
-        from canon_keeper.rules import attack
+        from canon_keeper_core.rules import attack
 
         try:
             return [w.name for w in attack.weapons_of(sheet, self._content_for_rules())]
@@ -1022,7 +1022,7 @@ class EncounterWidget(QWidget):
         sheet = (entity.data or {}).get("sheet")
         if not isinstance(sheet, dict):
             return 0
-        from canon_keeper.rules import derive
+        from canon_keeper_core.rules import derive
 
         try:
             return derive.initiative(sheet, self._content_for_rules())
@@ -1031,7 +1031,7 @@ class EncounterWidget(QWidget):
 
     def _content_for_rules(self):
         if self._content is None:
-            from canon_keeper.content import Content
+            from canon_keeper_core.content import Content
 
             self._content = Content(self._ctx.repos.settings)
         return self._content

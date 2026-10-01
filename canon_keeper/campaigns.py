@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from canon_keeper import config
-from canon_keeper.db import connect, migrate
+from canon_keeper_core.db import connect, migrate
 
 log = logging.getLogger("canonkeeper.campaigns")
 

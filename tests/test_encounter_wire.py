@@ -19,7 +19,7 @@ import pytest
 from canon_keeper.net.client import SessionClient
 from canon_keeper.net.projection import Viewer, project_encounter
 from canon_keeper.net.server import SessionServer
-from canon_keeper.repo.entities import Entity
+from canon_keeper_core.repo.entities import Entity
 from canon_keeper_protocol import MessageType
 
 

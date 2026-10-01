@@ -24,12 +24,12 @@ from pathlib import Path
 from PySide6.QtCore import QCoreApplication, QTimer
 
 from canon_keeper import __version__, config
-from canon_keeper.db import connect, migrate
+from canon_keeper_core.db import connect, migrate
 from canon_keeper_protocol import enrol
 from canon_keeper_protocol.auth import AuthError
 from canon_keeper.net.server import DEFAULT_PORT, SessionServer
-from canon_keeper.repo import Repos
-from canon_keeper.repo.entities import KIND_PC
+from canon_keeper_core.repo import Repos
+from canon_keeper_core.repo.entities import KIND_PC
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

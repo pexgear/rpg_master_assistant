@@ -16,7 +16,7 @@ from __future__ import annotations
 import pytest
 
 from canon_keeper.net.server import SessionServer
-from canon_keeper.repo.entities import KIND_NPC, KIND_PC, Entity
+from canon_keeper_core.repo.entities import KIND_NPC, KIND_PC, Entity
 
 
 @pytest.fixture
@@ -132,7 +132,7 @@ def test_autopilot_will_not_swing_before_the_fight_starts(qtbot, repos):
     import canon_keeper.net.client as client_module
     from canon_keeper_protocol import MessageType
     from canon_keeper.net.server import SessionServer
-    from canon_keeper.repo.entities import KIND_NPC, KIND_PC, Entity
+    from canon_keeper_core.repo.entities import KIND_NPC, KIND_PC, Entity
 
     campaign = repos.campaigns.ensure_default("Unstarted")
     hero = repos.entities.create(
@@ -181,7 +181,7 @@ def test_and_swings_happily_once_it_has(qtbot, repos):
     import canon_keeper.net.server as server_module
     from canon_keeper_protocol import MessageType
     from canon_keeper.net.server import SessionServer
-    from canon_keeper.repo.entities import KIND_NPC, KIND_PC, Entity
+    from canon_keeper_core.repo.entities import KIND_NPC, KIND_PC, Entity
 
     campaign = repos.campaigns.ensure_default("Started")
     hero = repos.entities.create(

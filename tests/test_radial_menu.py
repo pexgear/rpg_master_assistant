@@ -283,7 +283,7 @@ def test_the_wheel_draws_without_complaint(battlefield):
 def combat(qtbot, ctx):
     """A running fight in the DM's own Combat panel."""
     from canon_keeper.panels.encounter.widget import EncounterWidget
-    from canon_keeper.repo.entities import KIND_NPC, KIND_PC, Entity
+    from canon_keeper_core.repo.entities import KIND_NPC, KIND_PC, Entity
 
     repos = ctx.repos
     hero = repos.entities.create(

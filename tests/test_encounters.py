@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import pytest
 
-from canon_keeper.repo.encounters import MAX_SIZE, MIN_SIZE, order_of
-from canon_keeper.repo.entities import Entity
+from canon_keeper_core.repo.encounters import MAX_SIZE, MIN_SIZE, order_of
+from canon_keeper_core.repo.entities import Entity
 
 
 @pytest.fixture

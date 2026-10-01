@@ -10,8 +10,8 @@ from __future__ import annotations
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from canon_keeper.entity_actions import Target
-from canon_keeper.repo.entities import KIND_PC
-from canon_keeper.repo.invites import already_played
+from canon_keeper_core.repo.entities import KIND_PC
+from canon_keeper_core.repo.invites import already_played
 from canon_keeper_protocol import enrol
 
 

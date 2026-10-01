@@ -3,7 +3,7 @@
 Only the *inputs*: what the player chose, and what state the character is in.
 Everything a sheet displays that can be worked out -- modifiers, hit points,
 armour class, saving throws, spell slots -- is computed in
-:mod:`canon_keeper.rules.derive` rather than kept here, so it cannot drift out of
+:mod:`canon_keeper_core.rules.derive` rather than kept here, so it cannot drift out of
 step with the choices behind it.
 
 Sheets live inside ``entity.data["sheet"]``, so this is a plain dictionary

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from canon_keeper.db import connect, current_version, migrate
-from canon_keeper.repo import Repos
-from canon_keeper.repo.entities import KIND_LOCATION, KIND_NPC, Entity
+from canon_keeper_core.db import connect, current_version, migrate
+from canon_keeper_core.repo import Repos
+from canon_keeper_core.repo.entities import KIND_LOCATION, KIND_NPC, Entity
 
 
 def test_migrations_apply_from_empty(tmp_path):

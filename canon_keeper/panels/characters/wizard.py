@@ -29,9 +29,9 @@ from PySide6.QtWidgets import (
     QWizardPage,
 )
 
-from canon_keeper.content import Content
-from canon_keeper.rules import derive
-from canon_keeper.rules.sheet import (
+from canon_keeper_core.content import Content
+from canon_keeper_core.rules import derive
+from canon_keeper_core.rules.sheet import (
     ABILITIES,
     ABILITY_NAMES,
     POINT_BUY_BUDGET,

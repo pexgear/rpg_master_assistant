@@ -7,8 +7,8 @@ import pytest
 from canon_keeper.net.cache import forget, load, save, versions
 from canon_keeper.net.projection import Viewer, changed_sheet_fields, snapshot_since
 from canon_keeper.net.server import describe_changes
-from canon_keeper.repo.entities import KIND_NPC, KIND_PC, Entity
-from canon_keeper.rules.sheet import new_sheet
+from canon_keeper_core.repo.entities import KIND_NPC, KIND_PC, Entity
+from canon_keeper_core.rules.sheet import new_sheet
 
 
 @pytest.fixture
@@ -311,9 +311,9 @@ def test_a_campaign_keeps_its_key(repos, campaign):
 
 
 def test_two_campaigns_get_different_keys(repos, campaign, tmp_path):
-    from canon_keeper.db import connect, migrate
+    from canon_keeper_core.db import connect, migrate
     from canon_keeper.net.server import SessionServer
-    from canon_keeper.repo import Repos
+    from canon_keeper_core.repo import Repos
 
     other_conn = connect(tmp_path / "other.sqlite3")
     migrate(other_conn)
@@ -390,7 +390,7 @@ def test_a_proposal_still_matching_the_sheet_is_left_alone(repos, campaign, elar
 
 
 def test_what_is_said_is_kept(repos, campaign):
-    from canon_keeper.repo.chat import SAID
+    from canon_keeper_core.repo.chat import SAID
 
     repos.chat.add(campaign.id, SAID, "I check the door", speaker="Elara", role="player")
 
@@ -400,7 +400,7 @@ def test_what_is_said_is_kept(repos, campaign):
 
 
 def test_the_log_reads_in_order(repos, campaign):
-    from canon_keeper.repo.chat import SAID
+    from canon_keeper_core.repo.chat import SAID
 
     for line in ("first", "second", "third"):
         repos.chat.add(campaign.id, SAID, line)
@@ -414,7 +414,7 @@ def test_the_log_reads_in_order(repos, campaign):
 
 def test_only_the_tail_is_handed_out(repos, campaign):
     """Everything is kept; nobody rejoining wants to scroll through last month."""
-    from canon_keeper.repo.chat import SAID
+    from canon_keeper_core.repo.chat import SAID
 
     for n in range(250):
         repos.chat.add(campaign.id, SAID, f"line {n}")
@@ -428,7 +428,7 @@ def test_only_the_tail_is_handed_out(repos, campaign):
 
 
 def test_each_evening_is_its_own_log(repos, campaign):
-    from canon_keeper.repo.chat import SAID
+    from canon_keeper_core.repo.chat import SAID
 
     first = repos.sessions.start(campaign.id, "Session one")
     repos.chat.add(campaign.id, SAID, "last week", session_id=first.id)
@@ -444,7 +444,7 @@ def test_each_evening_is_its_own_log(repos, campaign):
 
 def test_the_speaker_is_a_copy_not_a_reference(repos, campaign, elara, marco):
     """A log should still read correctly after a character is renamed."""
-    from canon_keeper.repo.chat import SAID
+    from canon_keeper_core.repo.chat import SAID
 
     repos.chat.add(campaign.id, SAID, "hello", speaker="Elara")
 
@@ -456,7 +456,7 @@ def test_the_speaker_is_a_copy_not_a_reference(repos, campaign, elara, marco):
 
 
 def test_a_roll_keeps_its_detail(repos, campaign):
-    from canon_keeper.repo.chat import ROLLED
+    from canon_keeper_core.repo.chat import ROLLED
 
     repos.chat.add(
         campaign.id, ROLLED, "2d6+3 = [4, 6] +3 = 13",

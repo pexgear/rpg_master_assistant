@@ -22,7 +22,7 @@ from canon_keeper.panels.encounter import (
 )
 from canon_keeper.panels.encounter.grid import GridMap, Token
 from canon_keeper.plugin import AppContext
-from canon_keeper.repo.entities import KIND_NPC, KIND_PC, Entity
+from canon_keeper_core.repo.entities import KIND_NPC, KIND_PC, Entity
 
 
 @pytest.fixture

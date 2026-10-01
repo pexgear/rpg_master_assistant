@@ -114,7 +114,7 @@ def test_the_frame_caps_are_right(text):
 
 
 def test_every_migration_is_listed(text):
-    on_disk = sorted(p.name for p in (ROOT / "canon_keeper/db/migrations").glob("*.sql"))
+    on_disk = sorted(p.name for p in (ROOT / "canon_keeper_core/db/migrations").glob("*.sql"))
     missing = [name for name in on_disk if name not in text]
     assert not missing, (
         f"{missing} are not in ARCHITECTURE.md. A migration is a change to the "
@@ -123,7 +123,7 @@ def test_every_migration_is_listed(text):
 
 
 def test_it_lists_no_migration_that_does_not_exist(text):
-    on_disk = {p.name for p in (ROOT / "canon_keeper/db/migrations").glob("*.sql")}
+    on_disk = {p.name for p in (ROOT / "canon_keeper_core/db/migrations").glob("*.sql")}
     listed = set(re.findall(r"`(\d{3}_\w+\.sql)`", text))
     assert not listed - on_disk, f"{listed - on_disk} are listed but missing"
 
@@ -152,10 +152,25 @@ def test_the_console_scripts_still_exist(text):
 
 
 def test_the_file_map_is_not_fiction(text):
-    """Every path in the layout block exists."""
+    """Every path in the layout block exists.
+
+    The map covers more than one package now, so an indented path belongs to
+    whichever package heading it sits under rather than to a fixed root. Getting
+    that wrong is how a map that reads correctly fails anyway.
+    """
     block = text.split("## Where to look", 1)[1].split("```", 2)[1]
-    paths = re.findall(r"^\s{2}(\S+)", block, re.M)
-    missing = [p for p in paths if not (ROOT / "canon_keeper" / p.rstrip("/")).exists()]
+    missing = []
+    package = "canon_keeper"
+    for line in block.splitlines():
+        if not line.strip():
+            continue
+        if not line.startswith(" "):
+            # A package heading: "canon_keeper_core/  the game, no screen".
+            package = line.split()[0].rstrip("/")
+            continue
+        found = re.match(r"^\s{2}(\S+)", line)
+        if found and not (ROOT / package / found.group(1).rstrip("/")).exists():
+            missing.append(f"{package}/{found.group(1)}")
     assert not missing, f"{missing} are in the file map but not on disk"
 
 

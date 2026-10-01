@@ -21,7 +21,7 @@ import pytest
 
 from canon_keeper.net.client import SessionClient
 from canon_keeper.net.server import SessionServer
-from canon_keeper.repo.chat import DM_ONLY, EVERYONE, SYSTEM
+from canon_keeper_core.repo.chat import DM_ONLY, EVERYONE, SYSTEM
 
 
 @pytest.fixture

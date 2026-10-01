@@ -17,7 +17,7 @@ from canon_keeper.net.projection import (
     snapshot,
     visible_entity_ids,
 )
-from canon_keeper.repo.entities import KIND_LOCATION, KIND_NPC, KIND_PC, Entity
+from canon_keeper_core.repo.entities import KIND_LOCATION, KIND_NPC, KIND_PC, Entity
 
 
 @pytest.fixture
@@ -442,7 +442,7 @@ def test_a_player_can_edit_any_character_they_own(repos, campaign, marco, viewer
 
 
 def _with_sheet(repos, entity_id, **fields):
-    from canon_keeper.rules.sheet import new_sheet
+    from canon_keeper_core.rules.sheet import new_sheet
 
     entity = repos.entities.get(entity_id)
     entity.data["sheet"] = new_sheet(**fields)
@@ -538,7 +538,7 @@ def test_the_version_is_sent_with_the_entity(repos, campaign, world, marco, view
 
 def test_an_edit_against_a_stale_version_is_refused(repos, campaign, world, marco, viewer_for):
     """Otherwise the later of two edits silently erases the earlier."""
-    from canon_keeper.repo.entities import StaleWrite
+    from canon_keeper_core.repo.entities import StaleWrite
 
     _with_sheet(repos, world["marco_pc"].id, class_index="wizard", level=5)
     stale = repos.entities.get(world["marco_pc"].id).version

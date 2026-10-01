@@ -20,7 +20,7 @@ from dataclasses import replace
 import pytest
 
 from canon_keeper.net.server import SessionServer
-from canon_keeper.repo.entities import KIND_NPC, KIND_PC, Entity
+from canon_keeper_core.repo.entities import KIND_NPC, KIND_PC, Entity
 from canon_keeper_client import AgentSession
 from canon_keeper_protocol import enrol
 from canon_keeper_mcp.server import CanonKeeperTools, build_server
@@ -512,8 +512,14 @@ def test_a_seat_can_make_its_own_death_save(qapp, hosted, repos):
     mine = next(c for c in seen["standing"] if c["who"] == "Elara")
     assert mine["down"] is True, "a seat could not tell it was dying"
     assert "Rolled" in said
+    # Resolved, not which way. A natural twenty on a death save revives the
+    # character and *clears* the tally, so "the counters moved" is an assertion
+    # about a d20 -- it holds nineteen runs in twenty and then looks like a bug
+    # in the tool. Either outcome is the save having happened.
     after = repos.encounters.combatant(tokens["hero"].id)
-    assert (after.death_successes + after.death_failures) >= 1, "nothing was rolled"
+    tallied = (after.death_successes + after.death_failures) >= 1
+    revived = not after.down
+    assert tallied or revived, "nothing was rolled"
 
 
 # --------------------------------------------------- getting in for the first time

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from canon_keeper.content import Content, srd
+from canon_keeper_core.content import Content, srd
 
 
 @pytest.fixture

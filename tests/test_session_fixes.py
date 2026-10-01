@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QDockWidget, QMainWindow
 from canon_keeper.net.client import SessionClient
 from canon_keeper.net.server import SessionServer
 from canon_keeper.panels.table.widget import TableWidget
-from canon_keeper.repo.entities import KIND_PC, Entity
+from canon_keeper_core.repo.entities import KIND_PC, Entity
 from canon_keeper.shell.attention import TINT_ALPHA, Attention
 from canon_keeper_protocol import MessageType, SystemKind
 

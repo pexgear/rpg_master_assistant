@@ -12,9 +12,9 @@ import pytest
 from canon_keeper.bus import Bus
 from canon_keeper.naming import PanelNames
 from canon_keeper.net.state import SharedState
-from canon_keeper.db import connect, migrate
+from canon_keeper_core.db import connect, migrate
 from canon_keeper.plugin import AppContext
-from canon_keeper.repo import Repos
+from canon_keeper_core.repo import Repos
 
 
 @pytest.fixture(autouse=True)

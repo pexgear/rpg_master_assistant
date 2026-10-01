@@ -26,7 +26,7 @@ from PySide6.QtWidgets import QWidget
 
 if TYPE_CHECKING:  # pragma: no cover - import cycle avoidance only
     from canon_keeper.bus import Bus
-    from canon_keeper.repo import Repos
+    from canon_keeper_core.repo import Repos
 
 #: Bumped only on a breaking change to :class:`AppContext` or
 #: :class:`PanelPlugin`. Panels declaring a different major version are skipped

@@ -19,13 +19,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from canon_keeper.repo.entities import (
+from canon_keeper_core.repo.entities import (
     KIND_LOCATION,
     KIND_NPC,
     KIND_PC,
     Entity,
 )
-from canon_keeper.rules.sheet import BUILD_FIELDS, STATE_FIELDS, is_sheet
+from canon_keeper_core.rules.sheet import BUILD_FIELDS, STATE_FIELDS, is_sheet
 
 #: Keys inside ``entity.data`` a player may see on a shared entity.
 _SHARED_DATA_FIELDS: dict[str, tuple[str, ...]] = {

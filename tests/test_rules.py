@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import pytest
 
-from canon_keeper.content import Content
-from canon_keeper.rules import derive, sheet as sheet_module, validation
-from canon_keeper.rules.sheet import new_sheet
+from canon_keeper_core.content import Content
+from canon_keeper_core.rules import derive, sheet as sheet_module, validation
+from canon_keeper_core.rules.sheet import new_sheet
 
 
 @pytest.fixture

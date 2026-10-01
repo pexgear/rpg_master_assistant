@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from canon_keeper.panels.characters.widget import CharactersWidget
-from canon_keeper.repo.entities import KIND_PC, Entity
+from canon_keeper_core.repo.entities import KIND_PC, Entity
 
 
 @pytest.fixture

@@ -30,7 +30,7 @@ from canon_keeper.panels.encounter.grid import (
     eased,
     when_eased,
 )
-from canon_keeper.repo.entities import KIND_NPC, KIND_PC, Entity
+from canon_keeper_core.repo.entities import KIND_NPC, KIND_PC, Entity
 from canon_keeper_protocol import Played, grid
 
 

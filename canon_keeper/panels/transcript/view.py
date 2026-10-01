@@ -26,7 +26,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QMenu, QTextEdit
 
 from canon_keeper.matching import EntityMatcher
-from canon_keeper.repo.entities import (
+from canon_keeper_core.repo.entities import (
     KIND_FACTION,
     KIND_ITEM,
     KIND_LOCATION,

@@ -20,10 +20,10 @@ from __future__ import annotations
 import pytest
 
 import canon_keeper.net.server as server_module
-from canon_keeper.content import Content
+from canon_keeper_core.content import Content
 from canon_keeper.net.server import SessionServer
-from canon_keeper.repo.entities import KIND_NPC, KIND_PC, Entity
-from canon_keeper.rules import attack
+from canon_keeper_core.repo.entities import KIND_NPC, KIND_PC, Entity
+from canon_keeper_core.rules import attack
 
 
 def _sheet(equipment, **overrides) -> dict:

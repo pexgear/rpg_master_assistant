@@ -14,7 +14,7 @@ import pytest
 from PySide6.QtMultimedia import QAudioFormat
 
 from canon_keeper.audio import capture, transcribe
-from canon_keeper.repo.entities import KIND_LOCATION, KIND_NPC, Entity
+from canon_keeper_core.repo.entities import KIND_LOCATION, KIND_NPC, Entity
 
 
 def _format(sample_format, channels=1, rate=16000) -> QAudioFormat:

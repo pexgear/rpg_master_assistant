@@ -16,7 +16,7 @@ from PySide6.QtWidgets import QMenu
 
 from canon_keeper import entity_actions
 from canon_keeper.entity_actions import Target
-from canon_keeper.repo.entities import KIND_NPC, KIND_PC, Entity
+from canon_keeper_core.repo.entities import KIND_NPC, KIND_PC, Entity
 
 
 @pytest.fixture(autouse=True)

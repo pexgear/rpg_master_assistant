@@ -33,9 +33,9 @@ from canon_keeper.panels.characters.sheet_tab import SheetWidget
 from canon_keeper.panels.characters.wizard import CharacterWizard
 from canon_keeper.panels.sharing import ShareBar
 from canon_keeper.plugin import AppContext
-from canon_keeper.repo.entities import KIND_LOCATION, KIND_NPC, KIND_PC, Entity
-from canon_keeper.rules import derive
-from canon_keeper.rules.sheet import sheet_of
+from canon_keeper_core.repo.entities import KIND_LOCATION, KIND_NPC, KIND_PC, Entity
+from canon_keeper_core.rules import derive
+from canon_keeper_core.rules.sheet import sheet_of
 
 CHARACTER_KINDS = (KIND_NPC, KIND_PC)
 STATUSES = ("alive", "dead", "unknown", "captured", "missing")

@@ -16,11 +16,11 @@ from __future__ import annotations
 
 import pytest
 
-from canon_keeper.content import Content
+from canon_keeper_core.content import Content
 from canon_keeper.net.client import SessionClient
 from canon_keeper.net.server import SessionServer
-from canon_keeper.repo.entities import KIND_NPC, KIND_PC, Entity
-from canon_keeper.rules import attack
+from canon_keeper_core.repo.entities import KIND_NPC, KIND_PC, Entity
+from canon_keeper_core.rules import attack
 from canon_keeper_protocol import MessageType
 
 
@@ -809,20 +809,20 @@ def test_the_dm_passing_the_turn_stops_the_clock(qtbot, fight, monkeypatch):
 
 
 def test_speed_is_read_off_the_sheet(content):
-    from canon_keeper.rules import derive
+    from canon_keeper_core.rules import derive
 
     assert derive.speed_in_squares(_sheet(), content) == 6, "thirty feet"
     assert derive.speed_in_squares(_sheet(species="dwarf"), content) == 5
 
 
 def test_a_monster_with_no_species_still_gets_a_speed(content):
-    from canon_keeper.rules import derive
+    from canon_keeper_core.rules import derive
 
     assert derive.speed_in_squares({"schema": 1, "abilities": {}}, content) == 6
 
 
 def test_a_statblock_can_state_its_own(content):
-    from canon_keeper.rules import derive
+    from canon_keeper_core.rules import derive
 
     slow = {"schema": 1, "abilities": {}, "overrides": {"speed": 20}}
     assert derive.speed_in_squares(slow, content) == 4

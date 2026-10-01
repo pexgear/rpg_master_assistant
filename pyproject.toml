@@ -94,6 +94,7 @@ path = "canon_keeper/__init__.py"
 # something outside this repository needs to speak the wire without Qt.
 packages = [
   "canon_keeper",
+  "canon_keeper_core",
   "canon_keeper_protocol",
   "canon_keeper_client",
   "canon_keeper_dm_agent",

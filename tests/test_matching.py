@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from canon_keeper.matching import EntityMatcher
-from canon_keeper.repo.entities import KIND_LOCATION, KIND_NPC, Entity
+from canon_keeper_core.repo.entities import KIND_LOCATION, KIND_NPC, Entity
 
 
 def _make(repos, campaign_id, name, kind=KIND_NPC, aliases=None):

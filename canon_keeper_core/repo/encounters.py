@@ -28,7 +28,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 
-from canon_keeper.repo.entities import KIND_PC
+from canon_keeper_core.repo.entities import KIND_PC
 from canon_keeper_protocol import grid
 
 #: A grid smaller than this is not a battlefield, and one larger stops being
@@ -59,7 +59,7 @@ class Combatant:
     #: take its turns rather than being walked around the room.
     simulated: bool = False
     #: Death saving throws made and failed in this fight. Player characters
-    #: only; see :mod:`canon_keeper.rules.death`. Cleared by healing above zero,
+    #: only; see :mod:`canon_keeper_core.rules.death`. Cleared by healing above zero,
     #: and never carried out of the fight they were rolled in.
     death_successes: int = 0
     death_failures: int = 0
@@ -651,7 +651,7 @@ class EncounterRepo:
         -- a DM can bring them round, and a corpse is worth seeing -- but a fight
         that stopped on every one of them got slower the closer it came to being
         over, which is exactly backwards. Worked out by the caller, from
-        :func:`canon_keeper.rules.death.resting`, because hit points are not
+        :func:`canon_keeper_core.rules.death.resting`, because hit points are not
         this table's to know.
         """
         full = self.combatants(encounter_id)

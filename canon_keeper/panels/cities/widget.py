@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 
 from canon_keeper.panels.sharing import ShareBar
 from canon_keeper.plugin import AppContext
-from canon_keeper.repo.entities import KIND_LOCATION, Entity
+from canon_keeper_core.repo.entities import KIND_LOCATION, Entity
 
 PLACE_TYPES = ("region", "city", "town", "village", "district", "building", "room", "wilds")
 

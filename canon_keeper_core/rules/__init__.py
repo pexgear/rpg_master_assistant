@@ -5,7 +5,7 @@ player sent, so they must work anywhere -- including inside a headless server
 that has no window and no campaign of its own.
 """
 
-from canon_keeper.rules.derive import (
+from canon_keeper_core.rules.derive import (
     ability_modifiers,
     ability_scores,
     armour_class,
@@ -20,7 +20,7 @@ from canon_keeper.rules.derive import (
     spell_slots,
     summary,
 )
-from canon_keeper.rules.sheet import (
+from canon_keeper_core.rules.sheet import (
     ABILITIES,
     BUILD_FIELDS,
     SCHEMA,
@@ -30,7 +30,7 @@ from canon_keeper.rules.sheet import (
     new_sheet,
     sheet_of,
 )
-from canon_keeper.rules.validation import Report, validate
+from canon_keeper_core.rules.validation import Report, validate
 
 __all__ = [
     "ABILITIES",

@@ -34,8 +34,8 @@ from PySide6.QtWidgets import (
 from canon_keeper.panels.encounter.grid import Choice, GridMap, Preview, Token
 from canon_keeper.panels.encounter.view3d import MapView
 from canon_keeper.plugin import AppContext
-from canon_keeper.repo.entities import KIND_PC
-from canon_keeper.rules import death
+from canon_keeper_core.repo.entities import KIND_PC
+from canon_keeper_core.rules import death
 
 
 class PlayerEncounterWidget(QWidget):
@@ -329,7 +329,7 @@ class PlayerEncounterWidget(QWidget):
         """
         own = self._ctx.shared.own_character() if self._ctx.shared is not None else None
         sheet = ((own or {}).get("data") or {}).get("sheet") or {}
-        from canon_keeper.rules import attack
+        from canon_keeper_core.rules import attack
 
         try:
             return [w.name for w in attack.weapons_of(sheet, self._content())]
@@ -338,7 +338,7 @@ class PlayerEncounterWidget(QWidget):
 
     def _content(self):
         if self._srd is None:
-            from canon_keeper.content import Content
+            from canon_keeper_core.content import Content
 
             self._srd = Content(self._ctx.repos.settings)
         return self._srd

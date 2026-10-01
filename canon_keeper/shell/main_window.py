@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from canon_keeper import __version__, campaigns, config
-from canon_keeper.content import ATTRIBUTION as SRD_ATTRIBUTION
+from canon_keeper_core.content import ATTRIBUTION as SRD_ATTRIBUTION
 from canon_keeper.plugin import (
     API_VERSION,
     REACH_EVERYWHERE,
@@ -33,7 +33,7 @@ from canon_keeper.plugin import (
     AppContext,
 )
 from canon_keeper.shell import keys
-from canon_keeper.repo.layouts import AUTOSAVE_NAME
+from canon_keeper_core.repo.layouts import AUTOSAVE_NAME
 from canon_keeper.shell.attention import Attention
 from canon_keeper.templates import build
 from canon_keeper.shell.loader import LoadedPanel, LoadError

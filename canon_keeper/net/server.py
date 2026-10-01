@@ -25,11 +25,11 @@ from PySide6.QtNetwork import QHostAddress
 from PySide6.QtWebSockets import QWebSocket, QWebSocketServer
 
 from canon_keeper import campaigns
-from canon_keeper.content import Content
+from canon_keeper_core.content import Content
 from canon_keeper.net import discovery
 from canon_keeper_protocol import auth, enrol, grid, robots, turns
 from canon_keeper_protocol.messages import Played
-from canon_keeper.repo.chat import (
+from canon_keeper_core.repo.chat import (
     DEFAULT_LIMIT,
     DM_ONLY,
     EVERYONE,
@@ -38,9 +38,9 @@ from canon_keeper.repo.chat import (
     SYSTEM,
 )
 from canon_keeper_protocol.dice import DiceError, roll
-from canon_keeper.repo.entities import StaleWrite
-from canon_keeper.repo.invites import already_played
-from canon_keeper.rules.validation import validate
+from canon_keeper_core.repo.entities import StaleWrite
+from canon_keeper_core.repo.invites import already_played
+from canon_keeper_core.rules.validation import validate
 from canon_keeper.net.projection import (
     project_encounter,
     project_facts,
@@ -53,8 +53,8 @@ from canon_keeper.net.projection import (
     snapshot,
     visible_entity_ids,
 )
-from canon_keeper.repo.encounters import DEFAULT_HEIGHT, DEFAULT_WIDTH
-from canon_keeper.rules import attack, death, derive
+from canon_keeper_core.repo.encounters import DEFAULT_HEIGHT, DEFAULT_WIDTH
+from canon_keeper_core.rules import attack, death, derive
 from canon_keeper_protocol.messages import (
     MAX_CHAT_LENGTH,
     MAX_NAME_LENGTH,
@@ -3023,7 +3023,7 @@ class SessionServer(QObject):
 
         Worked out here rather than in the repository because it needs hit
         points, which live on the entity. See
-        :func:`canon_keeper.rules.death.resting`.
+        :func:`canon_keeper_core.rules.death.resting`.
         """
         encounter = self._the_running_fight()
         if encounter is None:

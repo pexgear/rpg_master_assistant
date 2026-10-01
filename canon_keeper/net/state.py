@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QObject, Signal
 
-from canon_keeper.repo.entities import KIND_LOCATION
+from canon_keeper_core.repo.entities import KIND_LOCATION
 
 
 class SharedState(QObject):

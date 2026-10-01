@@ -36,7 +36,7 @@ from canon_keeper.audio import capture, transcribe
 from canon_keeper.matching import EntityMatcher
 from canon_keeper.panels.transcript.view import TranscriptView
 from canon_keeper.plugin import REACH_EVERYWHERE, AppContext, ReservedKey
-from canon_keeper.repo.entities import Entity
+from canon_keeper_core.repo.entities import Entity
 
 RECORD_SHORTCUT = "F9"
 

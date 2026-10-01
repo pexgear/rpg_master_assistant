@@ -1772,7 +1772,7 @@ class TableWidget(QWidget):
 
     def _rules_content(self):
         if self._content is None:
-            from canon_keeper.content import Content
+            from canon_keeper_core.content import Content
 
             self._content = Content(self._ctx.repos.settings)
         return self._content

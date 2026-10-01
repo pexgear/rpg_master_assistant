@@ -17,11 +17,11 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from canon_keeper import __version__, assets, campaigns, config, credentials
 from canon_keeper.bus import Bus
-from canon_keeper.db import connect, migrate
+from canon_keeper_core.db import connect, migrate
 from canon_keeper.naming import PanelNames
 from canon_keeper.net.state import SharedState
 from canon_keeper.plugin import AppContext, PendingJoin
-from canon_keeper.repo import Repos
+from canon_keeper_core.repo import Repos
 from canon_keeper.shell.loader import discover_panels
 from canon_keeper.shell.main_window import MainWindow
 from canon_keeper.shell.startup import Launch, choose_campaign

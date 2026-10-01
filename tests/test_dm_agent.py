@@ -16,7 +16,7 @@ import asyncio
 import pytest
 
 from canon_keeper.net.server import SessionServer
-from canon_keeper.repo.entities import KIND_NPC, Entity
+from canon_keeper_core.repo.entities import KIND_NPC, Entity
 from canon_keeper_dm_agent.context import build_prompt
 from canon_keeper_client import AgentSession, LoginFailed, Table
 from canon_keeper_protocol import Member

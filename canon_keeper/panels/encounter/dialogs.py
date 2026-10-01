@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from canon_keeper.repo.encounters import (
+from canon_keeper_core.repo.encounters import (
     DEFAULT_HEIGHT,
     DEFAULT_WIDTH,
     MAX_SIZE,

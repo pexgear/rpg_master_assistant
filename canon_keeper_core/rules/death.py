@@ -14,7 +14,7 @@ So the difference is here, in one place, and it is the only difference:
 ``DEAD``     three saves failed, or a creature that never got saves.
 
 **The dice are not rolled here.** :func:`save` is handed a roller, the same way
-:func:`canon_keeper.rules.attack.resolve` is, and the host passes it the shared
+:func:`canon_keeper_core.rules.attack.resolve` is, and the host passes it the shared
 one. A death save decided by the dying player's own laptop is an honour system
 with extra steps, and this is the roll people care most about.
 """
@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from canon_keeper.repo.entities import KIND_PC
+from canon_keeper_core.repo.entities import KIND_PC
 
 #: Saves needed either way. Three and three, as written.
 SAVES_NEEDED = 3

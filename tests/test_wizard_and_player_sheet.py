@@ -12,8 +12,8 @@ from canon_keeper.net.state import SharedState
 from canon_keeper.panels.characters.player_widget import PlayerCharactersWidget
 from canon_keeper.panels.characters.wizard import ARRAY, MANUAL, CharacterWizard
 from canon_keeper.plugin import AppContext
-from canon_keeper.rules import derive
-from canon_keeper.rules.sheet import STANDARD_ARRAY, new_sheet
+from canon_keeper_core.rules import derive
+from canon_keeper_core.rules.sheet import STANDARD_ARRAY, new_sheet
 
 
 # ---------------------------------------------------------------------- wizard
@@ -171,7 +171,7 @@ def test_finishing_produces_a_usable_sheet(ctx, wizard):
     assert sheet["level"] == 5
     assert sheet["hp_current"] is None, "starts at full; the sheet derives it"
     assert sheet["equipment"], "the class's starting equipment came along"
-    from canon_keeper.rules.validation import validate
+    from canon_keeper_core.rules.validation import validate
 
     assert validate(sheet, wizard.content).ok
 

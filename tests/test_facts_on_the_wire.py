@@ -9,7 +9,7 @@ the rule is not "filter it for players", it is "players do not get it".
 from __future__ import annotations
 
 from canon_keeper.net.projection import Viewer, project_facts
-from canon_keeper.repo.entities import KIND_NPC, Entity
+from canon_keeper_core.repo.entities import KIND_NPC, Entity
 from canon_keeper_protocol import MessageType
 
 

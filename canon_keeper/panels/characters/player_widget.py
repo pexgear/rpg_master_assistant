@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 
 from canon_keeper.panels.characters.sheet_tab import SheetWidget
 from canon_keeper.plugin import AppContext
-from canon_keeper.repo.entities import KIND_NPC, KIND_PC
+from canon_keeper_core.repo.entities import KIND_NPC, KIND_PC
 
 _ID_ROLE = 256
 

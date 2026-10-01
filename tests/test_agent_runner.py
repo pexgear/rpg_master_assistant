@@ -481,9 +481,9 @@ def test_a_living_agent_is_left_alone(table):
 
 def test_two_campaigns_do_not_share_a_password(ctx, keyring_in_memory, repos):
     """Both are campaign 1 on disk. They must not be campaign 1 in the keychain."""
-    from canon_keeper.db.connection import connect
-    from canon_keeper.db.migrate import migrate
-    from canon_keeper.repo import Repos
+    from canon_keeper_core.db.connection import connect
+    from canon_keeper_core.db.migrate import migrate
+    from canon_keeper_core.repo import Repos
 
     conn = connect(":memory:")
     migrate(conn)

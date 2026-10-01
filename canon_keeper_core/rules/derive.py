@@ -1,6 +1,6 @@
 """Everything a sheet shows that can be worked out from what it stores.
 
-Pure functions over a sheet dict and a :class:`~canon_keeper.content.Content`.
+Pure functions over a sheet dict and a :class:`~canon_keeper_core.content.Content`.
 No Qt, no database, no globals -- partly so they are trivial to test, and partly
 because the host runs them to check what a player sent.
 
@@ -10,7 +10,7 @@ no rule predicts, and a model with nowhere to put them gets worked around.
 
 from __future__ import annotations
 
-from canon_keeper.rules.sheet import ABILITIES, MAX_LEVEL, MIN_LEVEL
+from canon_keeper_core.rules.sheet import ABILITIES, MAX_LEVEL, MIN_LEVEL
 
 #: Ability used for spellcasting, by class. The SRD carries this per class in a
 #: shape that is awkward to read, and it never changes, so it is written out.

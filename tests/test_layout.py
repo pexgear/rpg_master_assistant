@@ -12,7 +12,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel
 
 from canon_keeper.plugin import API_VERSION
-from canon_keeper.repo.layouts import AUTOSAVE_NAME
+from canon_keeper_core.repo.layouts import AUTOSAVE_NAME
 from canon_keeper.shell.loader import LoadedPanel
 from canon_keeper.shell.main_window import MainWindow
 

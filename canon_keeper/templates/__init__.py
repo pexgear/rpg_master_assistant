@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from canon_keeper.repo.entities import KIND_PC
+from canon_keeper_core.repo.entities import KIND_PC
 
 log = logging.getLogger("canonkeeper.templates")
 

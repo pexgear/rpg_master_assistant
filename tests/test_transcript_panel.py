@@ -15,7 +15,7 @@ import pytest
 from canon_keeper.audio.transcribe import TranscriptionResult
 from canon_keeper.panels.transcript.view import PREFIX_LENGTH
 from canon_keeper.panels.transcript.widget import TranscriptWidget
-from canon_keeper.repo.entities import KIND_LOCATION, KIND_NPC
+from canon_keeper_core.repo.entities import KIND_LOCATION, KIND_NPC
 
 
 @pytest.fixture

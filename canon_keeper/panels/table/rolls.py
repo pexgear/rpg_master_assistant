@@ -67,7 +67,7 @@ SKILL = "skill"
 SAVE = "save"
 #: Ten or better on a plain d20, and the number is not in the sentence: it is
 #: the rule rather than something a DM set. Repeated from
-#: :mod:`canon_keeper.rules.death` rather than imported, because this module
+#: :mod:`canon_keeper_core.rules.death` rather than imported, because this module
 #: runs in a player's app where the campaign's rules are somebody else's.
 DEATH_SAVE_DC = 10
 
@@ -217,7 +217,7 @@ def bonus_for(prompt: Prompt, sheet: dict, content) -> int:
     if not isinstance(sheet, dict) or not sheet:
         return 0
 
-    from canon_keeper.rules import derive
+    from canon_keeper_core.rules import derive
 
     if prompt.kind == DEATH:
         # No modifier of any kind. Not proficiency, not Constitution: a death

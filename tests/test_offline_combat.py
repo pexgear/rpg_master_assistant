@@ -19,7 +19,7 @@ from canon_keeper.panels.table.widget import TableWidget
 from dataclasses import replace
 
 from canon_keeper_protocol import turns
-from canon_keeper.repo.entities import KIND_NPC, KIND_PC, Entity
+from canon_keeper_core.repo.entities import KIND_NPC, KIND_PC, Entity
 
 
 @pytest.fixture

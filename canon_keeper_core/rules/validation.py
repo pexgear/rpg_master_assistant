@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from canon_keeper.rules.sheet import (
+from canon_keeper_core.rules.sheet import (
     ABILITIES,
     MAX_ABILITY,
     MAX_LEVEL,

@@ -29,8 +29,8 @@ from canon_keeper.net import discovery
 from canon_keeper_protocol import enrol
 from canon_keeper_protocol.auth import AuthError
 from canon_keeper.net.server import DEFAULT_PORT
-from canon_keeper.repo.entities import KIND_PC
-from canon_keeper.repo.invites import already_played
+from canon_keeper_core.repo.entities import KIND_PC
+from canon_keeper_core.repo.invites import already_played
 
 _URL_ROLE = 256
 

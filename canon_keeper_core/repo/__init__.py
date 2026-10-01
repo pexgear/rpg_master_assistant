@@ -4,18 +4,18 @@ from __future__ import annotations
 
 import sqlite3
 
-from canon_keeper.repo.accounts import Account, AccountRepo
-from canon_keeper.repo.campaigns import CampaignRepo
-from canon_keeper.repo.chat import ChatMessage, ChatRepo
-from canon_keeper.repo.encounters import Combatant, Encounter, EncounterRepo
-from canon_keeper.repo.entities import Entity, EntityRepo, StaleWrite
-from canon_keeper.repo.facts import Fact, FactRepo
-from canon_keeper.repo.invites import Invite, InviteRepo
-from canon_keeper.repo.layouts import LayoutRepo
-from canon_keeper.repo.proposals import Proposal, ProposalRepo
-from canon_keeper.repo.sessions import Session, SessionRepo, Utterance, UtteranceRepo
-from canon_keeper.repo.settings import SettingsRepo
-from canon_keeper.repo.shares import Share, ShareRepo
+from canon_keeper_core.repo.accounts import Account, AccountRepo
+from canon_keeper_core.repo.campaigns import CampaignRepo
+from canon_keeper_core.repo.chat import ChatMessage, ChatRepo
+from canon_keeper_core.repo.encounters import Combatant, Encounter, EncounterRepo
+from canon_keeper_core.repo.entities import Entity, EntityRepo, StaleWrite
+from canon_keeper_core.repo.facts import Fact, FactRepo
+from canon_keeper_core.repo.invites import Invite, InviteRepo
+from canon_keeper_core.repo.layouts import LayoutRepo
+from canon_keeper_core.repo.proposals import Proposal, ProposalRepo
+from canon_keeper_core.repo.sessions import Session, SessionRepo, Utterance, UtteranceRepo
+from canon_keeper_core.repo.settings import SettingsRepo
+from canon_keeper_core.repo.shares import Share, ShareRepo
 
 
 class Repos:

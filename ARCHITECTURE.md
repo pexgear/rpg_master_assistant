@@ -47,10 +47,24 @@ imports the app.
 |---|---|---|
 | `canon_keeper_protocol` | the wire contract: frames, login, dice | the standard library, nothing else |
 | `canon_keeper_client` | a headless connection to a session | `websockets` |
-| `canon_keeper` | the app, the host, the source of truth | PySide6, platformdirs, keyring |
+| `canon_keeper_core` | the game with no screen: database, rules, SRD content | `platformdirs` |
+| `canon_keeper` | the app and the host | PySide6, keyring, and the core |
 | `canon_keeper_dm_agent` | the autopilot agent, answering for the DM | `anthropic` |
 | `canon_keeper_player_agent` | one character, played while its player is away | the standard library |
 | `canon_keeper_mcp` | one seat exposed over MCP | `mcp` |
+
+**The arrows point one way, and one of them moved.** `canon_keeper_core` is the
+game with no screen attached -- the database, the repositories, the rules, the
+SRD. It already imported no Qt; it was merely packaged inside the app, which made
+"run a session without a screen" mean installing 660 MB of Qt in order to do it.
+
+The invariant it carries is worth restating because the move looks like it
+weakens it and does not. "Nothing outside the app imports the app" existed to
+keep a headless client unable to open a campaign database. The rule is now
+sharper: **a client imports the protocol and nothing else; the host imports the
+core.** A client reaching into the core would be reading a campaign file directly
+rather than asking somebody who holds the dice, which is the whole thing being
+prevented.
 
 **The player agent is one per character, and that is the design.** It connects
 on a seat token, so it is sent what that player is sent and nothing else — two
@@ -996,15 +1010,17 @@ canon_keeper/
   agent_runner.py   creating the agent login and supervising its process
   shell/            main window, docking, layouts, plugin loader, startup,
                     keyboard reach and the settings dialog
-  db/               connection, migrate, migrations/
-  repo/             one module per table
   net/              server, client, projection, cache, discovery, funnel, state
-  rules/            sheet schema, derivation, validation, attacks
-  content/          SRD 5.1 + homebrew merge
   audio/            capture, transcription, dictation
   panels/           characters, cities, transcript, table, encounter
   templates/        one-shots: the format, the builder, and the bundled JSON
   assets/           files read at runtime; the application icon
+
+canon_keeper_core/  the game, with no screen attached
+  db/               connection, migrate, migrations/
+  repo/             one module per table
+  rules/            sheet schema, derivation, validation, attacks
+  content/          SRD 5.1 + homebrew merge
 ```
 
 ---

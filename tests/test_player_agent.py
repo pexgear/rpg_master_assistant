@@ -16,7 +16,7 @@ import asyncio
 import pytest
 
 from canon_keeper.net.server import SessionServer
-from canon_keeper.repo.entities import KIND_NPC, KIND_PC, Entity
+from canon_keeper_core.repo.entities import KIND_NPC, KIND_PC, Entity
 from canon_keeper_client.session import AgentSession, LoginFailed
 from canon_keeper_player_agent.play import DEFAULT_SPEED, Stand_In
 from canon_keeper_player_agent.tactics import decide, enemies_of

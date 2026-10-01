@@ -7,7 +7,7 @@ foundation for a saved sheet.
 Loading is lazy and cached per file. Spells alone are 600 KB, and most sessions
 never open them, so paying that cost at startup would be rude.
 
-Nothing outside :mod:`canon_keeper.content` should import this module. Lookups go
+Nothing outside :mod:`canon_keeper_core.content` should import this module. Lookups go
 through the merge layer, which adds whatever the campaign has defined -- the SRD
 has exactly one background, so that seam is needed on day one.
 """

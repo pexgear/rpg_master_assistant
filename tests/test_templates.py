@@ -11,9 +11,9 @@ import json
 
 import pytest
 
-from canon_keeper.db import connect, migrate
-from canon_keeper.repo import Repos
-from canon_keeper.repo.entities import KIND_PC
+from canon_keeper_core.db import connect, migrate
+from canon_keeper_core.repo import Repos
+from canon_keeper_core.repo.entities import KIND_PC
 from canon_keeper.templates import (
     PROGRESS_SETTING,
     SOURCE_SETTING,
@@ -234,7 +234,7 @@ def test_every_monster_has_a_statblock():
 
 
 def test_every_sheet_is_one(repos):
-    from canon_keeper.rules.sheet import is_sheet
+    from canon_keeper_core.rules.sheet import is_sheet
 
     for kind in ("pc", "npc"):
         for template_id, key, sheet in _sheets(kind):
@@ -243,8 +243,8 @@ def test_every_sheet_is_one(repos):
 
 def test_every_sheet_is_legal(repos):
     """The same check the host runs on a player's first edit."""
-    from canon_keeper.content import Content
-    from canon_keeper.rules.validation import validate
+    from canon_keeper_core.content import Content
+    from canon_keeper_core.rules.validation import validate
 
     content = Content(repos.settings)
     for kind in ("pc", "npc"):
@@ -275,8 +275,8 @@ def test_the_two_hit_point_numbers_agree(repos):
     They are two copies of one fact, so a template that disagrees with itself
     would show a player one number and the DM another.
     """
-    from canon_keeper.content import Content
-    from canon_keeper.rules import derive
+    from canon_keeper_core.content import Content
+    from canon_keeper_core.rules import derive
 
     content = Content(repos.settings)
     for template in available():
@@ -515,7 +515,7 @@ def test_starting_again_puts_it_back(tmp_path):
     before = _snapshot(repos, campaign_id)
 
     # An evening happens.
-    from canon_keeper.repo.entities import KIND_NPC, Entity
+    from canon_keeper_core.repo.entities import KIND_NPC, Entity
 
     repos.entities.create(
         Entity(id=None, campaign_id=campaign_id, kind=KIND_NPC, name="An invention")

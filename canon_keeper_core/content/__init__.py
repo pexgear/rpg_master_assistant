@@ -17,8 +17,8 @@ from __future__ import annotations
 import json
 import logging
 
-from canon_keeper.content import srd
-from canon_keeper.content.srd import ATTRIBUTION, COLLECTIONS
+from canon_keeper_core.content import srd
+from canon_keeper_core.content.srd import ATTRIBUTION, COLLECTIONS
 
 log = logging.getLogger("canonkeeper.content")
 
