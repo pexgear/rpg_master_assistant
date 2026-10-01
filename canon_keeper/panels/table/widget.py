@@ -874,7 +874,7 @@ class TableWidget(QWidget):
             # walk or a swing is an animation, not just a database row that
             # changed underneath it.
             self._alone.encounter_applied.connect(self._on_agent_moved)
-            self._alone.played.connect(self._ctx.bus.play)
+            self._alone.played.connect(self._ctx.bus.play.emit)
         return self._alone
 
     def _on_turn_taken(self, turn: dict) -> None:
@@ -1148,7 +1148,7 @@ class TableWidget(QWidget):
         # Normally the wire carries this, through our own loopback join below
         # -- but that join has not completed the instant hosting starts, and
         # this covers the narrow window before it has.
-        server.played.connect(self._ctx.bus.play)
+        server.played.connect(self._ctx.bus.play.emit)
         if not server.start(port):
             server.deleteLater()
             return

@@ -20,12 +20,15 @@ import logging
 import secrets
 from dataclasses import dataclass, field
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject
 from PySide6.QtNetwork import QHostAddress
 from PySide6.QtWebSockets import QWebSocket, QWebSocketServer
 
 from canon_keeper import campaigns
+from canon_keeper.net.qt_clock import QtClock
+from canon_keeper_core import clock
 from canon_keeper_core.content import Content
+from canon_keeper_core.hooks import Hook
 from canon_keeper.net import discovery
 from canon_keeper_protocol import auth, enrol, grid, robots, turns
 from canon_keeper_protocol.messages import Played
@@ -97,7 +100,7 @@ MACHINE_TURN_MS = 6_000
 class _Pending:
     """A connection that has said hello but not yet proved who it is."""
 
-    timer: QTimer
+    timer: clock.Later
     username: str = ""
     nonce: bytes = b""
     account_id: int | None = None
@@ -142,23 +145,13 @@ class _Session:
 
 
 class SessionServer(QObject):
-    started = Signal(int)  # port
-    stopped = Signal()
-    failed = Signal(str)
-    roster_changed = Signal(list)  # list[Member]
-    #: A player's edit was applied. The DM's own panels read the database
-    #: directly, so without this their screen shows yesterday's hit points.
-    entity_applied = Signal(int)
-    #: Something moved a token that was not the DM's own panel -- today only an
-    #: agent on autopilot. Same reason as above: the DM's map is read from the
-    #: database, so it does not know until it is told.
-    encounter_applied = Signal()
-    #: A move or a swing happened, for whoever is watching with nobody
-    #: connected to send it to. Everyone connected -- including the DM's own
-    #: loopback join while hosting -- gets this over the wire instead, from
-    #: :meth:`_show`; this is only for the fight run alone, where there is no
-    #: wire and the DM's own map would otherwise just teleport tokens around.
-    played = Signal(dict)
+    """The host. Announces itself through :class:`Hook` rather than ``Signal``.
+
+    Hooks because the thing that owns every rule in the game should be
+    importable without a desktop toolkit, and a signal was the only reason it
+    was not -- besides the socket and the clock, which are next. They connect
+    and emit like a signal, so nothing listening had to change.
+    """
 
     def __init__(
         self,
@@ -166,8 +159,30 @@ class SessionServer(QObject):
         campaign_id: int,
         session_name: str = "Canon Keeper session",
         parent: QObject | None = None,
+        clock_keeper=None,
     ) -> None:
         super().__init__(parent)
+        #: Who counts the seconds. Qt's while the host is embedded in the app;
+        #: the event loop's for a host running on its own. The rules ask for
+        #: neither by name -- see canon_keeper_core.clock.
+        self._clock = clock_keeper if clock_keeper is not None else QtClock(self)
+        self.started = Hook("started")           # port
+        self.stopped = Hook("stopped")
+        self.failed = Hook("failed")             # a reason, for a person
+        self.roster_changed = Hook("roster_changed")  # list[Member]
+        #: A player's edit was applied. The DM's own panels read the database
+        #: directly, so without this their screen shows yesterday's hit points.
+        self.entity_applied = Hook("entity_applied")  # entity id
+        #: Something moved a token that was not the DM's own panel -- today only
+        #: an agent on autopilot. Same reason as above: the DM's map is read
+        #: from the database, so it does not know until it is told.
+        self.encounter_applied = Hook("encounter_applied")
+        #: A move or a swing happened, for whoever is watching with nobody
+        #: connected to send it to. Everyone connected -- including the DM's own
+        #: loopback join while hosting -- gets this over the wire instead, from
+        #: :meth:`_show`; this is only for the fight run alone, where there is
+        #: no wire and the DM's own map would otherwise teleport tokens about.
+        self.played = Hook("played")
         self.repos = repos
         self.campaign_id = campaign_id
         self.session_name = session_name
@@ -229,11 +244,23 @@ class SessionServer(QObject):
         #: through with autopilot off and is spent the moment it is used, so
         #: asking for a translation never becomes the agent running the fight.
         self._translating: int | None = None
-        self._turn_clock = QTimer(self)
-        self._turn_clock.setSingleShot(True)
-        self._turn_clock.timeout.connect(self._nobody_answered)
+        #: The turn being waited on, or NEVER. One at a time: the clock was
+        #: single-shot before and starting it again replaced what was running.
+        self._turn_clock = clock.NEVER
         self._pending: dict[QWebSocket, _Pending] = {}
         self._beacon = discovery.Beacon(self)
+
+    def _wait_for_an_answer(self, milliseconds: int) -> None:
+        """Start the turn clock, replacing whatever it was waiting on.
+
+        Replacing rather than stacking, which is what a single-shot timer
+        restarted did: there is one turn in progress and one thing to stop
+        waiting for.
+        """
+        self._turn_clock.cancel()
+        self._turn_clock = self._clock.later(
+            milliseconds / 1000, self._nobody_answered
+        )
 
     def _open_session(self) -> int | None:
         try:
@@ -349,7 +376,7 @@ class SessionServer(QObject):
         self._beacon.stop()
         # Nothing to wait for once there is nobody to wait on.
         self._waiting_on = None
-        self._turn_clock.stop()
+        self._turn_clock.cancel()
 
         # Detach before closing. QWebSocketServer owns the sockets it handed us,
         # so closing it destroys them -- and a queued `disconnected` would then
@@ -360,7 +387,7 @@ class SessionServer(QObject):
 
         self._sessions.clear()
         for pending in self._pending.values():
-            pending.timer.stop()
+            pending.timer.cancel()
         self._pending.clear()
 
         if self._server is not None:
@@ -381,12 +408,12 @@ class SessionServer(QObject):
             )
             socket.disconnected.connect(lambda s=socket: self._on_disconnected(s))
 
-            timer = QTimer(self)
-            timer.setSingleShot(True)
-            timer.setInterval(LOGIN_TIMEOUT_MS)
-            timer.timeout.connect(lambda s=socket: self._drop_silent(s))
-            timer.start()
-            self._pending[socket] = _Pending(timer=timer)
+            self._pending[socket] = _Pending(
+                timer=self._clock.later(
+                    LOGIN_TIMEOUT_MS / 1000,
+                    lambda s=socket: self._drop_silent(s),
+                )
+            )
 
     def _drop_silent(self, socket: QWebSocket) -> None:
         if socket in self._pending:
@@ -397,7 +424,7 @@ class SessionServer(QObject):
     def _on_disconnected(self, socket: QWebSocket) -> None:
         pending = self._pending.pop(socket, None)
         if pending is not None:
-            pending.timer.stop()
+            pending.timer.cancel()
         session = self._sessions.pop(socket, None)
         if session is not None and session.busy:
             # Otherwise "Autopilot is writing..." outlives the agent.
@@ -513,7 +540,7 @@ class SessionServer(QObject):
                     code="bad_login",
                     message=auth.explain(),
                 )
-                QTimer.singleShot(200, socket.close)
+                self._clock.later(0.2, socket.close)
                 return
             pending.known = self._trusted_versions(message)
             self._admit(
@@ -580,7 +607,7 @@ class SessionServer(QObject):
                 socket, MessageType.ERROR, code="bad_login", message=auth.explain()
             )
             if pending.attempts >= 3:
-                QTimer.singleShot(200, socket.close)
+                self._clock.later(0.2, socket.close)
             else:
                 # New nonce, so the next attempt cannot replay this one.
                 pending.nonce = auth.new_nonce()
@@ -621,7 +648,7 @@ class SessionServer(QObject):
         pending.attempts += 1
         if pending.attempts > enrol.MAX_ATTEMPTS:
             log.info("too many enrolment attempts; closing")
-            QTimer.singleShot(200, socket.close)
+            self._clock.later(0.2, socket.close)
             return
 
         username = clean_name(message.get("username", ""))
@@ -781,7 +808,7 @@ class SessionServer(QObject):
                     text="That character is back with their player.",
                     kind=SystemKind.NOTICE.value,
                 )
-                QTimer.singleShot(200, socket.close)
+                self._clock.later(0.2, socket.close)
 
     def _seat_holder(self, token: str):
         """``(account, entity_id)`` for a live token, or ``(None, None)``.
@@ -870,7 +897,7 @@ class SessionServer(QObject):
             socket, MessageType.ERROR, code="bad_invite", message=enrol.explain()
         )
         if pending.attempts >= enrol.MAX_ATTEMPTS:
-            QTimer.singleShot(200, socket.close)
+            self._clock.later(0.2, socket.close)
             return
         # A new nonce, so a recorded attempt cannot be replayed and so the pad
         # is never derived twice from the same code and nonce.
@@ -901,7 +928,7 @@ class SessionServer(QObject):
                     ),
                     kind=SystemKind.NOTICE.value,
                 )
-                QTimer.singleShot(200, socket.close)
+                self._clock.later(0.2, socket.close)
 
     def invite_for(self, entity_id: int) -> str:
         """Make an invite for a character and return the code. The DM's button.
@@ -930,7 +957,7 @@ class SessionServer(QObject):
         name: str,
         seat_for: int | None = None,
     ) -> None:
-        pending.timer.stop()
+        pending.timer.cancel()
         self._pending.pop(socket, None)
 
         if account is None:  # the host's own app
@@ -3137,7 +3164,7 @@ class SessionServer(QObject):
                 "them, propose nothing, and do not say how it comes out."
             )
         self._waiting_on = combatant.id
-        self._turn_clock.start(STILL_YOUR_TURN_MS)
+        self._wait_for_an_answer(STILL_YOUR_TURN_MS)
         self._send_to_account(
             entity.owner_account_id,
             MessageType.YOUR_TURN,
@@ -3326,10 +3353,10 @@ class SessionServer(QObject):
             # character handed to autopilot took its turn and then held the
             # whole table, because the only thing that ever ended a turn was a
             # person pressing Done.
-            self._turn_clock.start(MACHINE_TURN_MS)
+            self._wait_for_an_answer(MACHINE_TURN_MS)
             return
 
-        self._turn_clock.start(STILL_YOUR_TURN_MS)
+        self._wait_for_an_answer(STILL_YOUR_TURN_MS)
         self._send_to_account(
             entity.owner_account_id,
             MessageType.YOUR_TURN,
@@ -3344,7 +3371,7 @@ class SessionServer(QObject):
         if self._waiting_on is None:
             return
         combatant_id, self._waiting_on = self._waiting_on, None
-        self._turn_clock.stop()
+        self._turn_clock.cancel()
         entity = self._entity_of(combatant_id)
         if entity is not None and entity.owner_account_id is not None:
             self._send_to_account(
@@ -3389,7 +3416,7 @@ class SessionServer(QObject):
             # comes back as an action on somebody else's. Thinking counts as
             # something happening.
             self._waiting_on = combatant_id
-            self._turn_clock.start(MACHINE_TURN_MS)
+            self._wait_for_an_answer(MACHINE_TURN_MS)
             return
 
         entity = self._entity_of(combatant_id)
