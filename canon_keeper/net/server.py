@@ -292,7 +292,31 @@ class SessionServer(QObject):
 
     @property
     def members(self) -> list[Member]:
-        return [s.member for s in self._sessions.values()]
+        """Who is at the table. **People, not connections.**
+
+        One login may hold several at once, and that is ordinary rather than a
+        mistake: the app and an MCP seat, or a stand-in beside the person it
+        stands in for, or simply a client that has not noticed it was replaced.
+        ``_send_to_account`` has always said so -- "every connection that login
+        has open".
+
+        The roster was one entry per socket, so somebody who joined from two
+        places was two people at the table, and three was three. A table
+        counting its own players wrongly is worse than a cosmetic bug: it is the
+        list a DM reads to see who has arrived.
+
+        Collapsed on the account, because that is the person. A connection with
+        no account behind it -- the host's own app, which arrives on a token --
+        is kept as itself, since there is nothing to collapse it onto and
+        several of them are several.
+        """
+        seen: dict[object, Member] = {}
+        for socket, session in self._sessions.items():
+            who = session.account_id if session.account_id is not None else socket
+            # First one wins: the earliest connection is the one the rest of the
+            # table has already seen arrive.
+            seen.setdefault(who, session.member)
+        return list(seen.values())
 
     def start(self, port: int = DEFAULT_PORT, announce: bool = True) -> bool:
         if self.is_running:

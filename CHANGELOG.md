@@ -5,6 +5,18 @@ What changed, from the point of view of someone running a game. See
 
 ## Unreleased
 
+### Fixes
+
+- **Somebody who joined from two places was two people at the table.** The
+  roster counted connections, and one login holds several as a matter of course
+  -- the app and an MCP seat, or a client that has not noticed it was replaced.
+  Three ways in was three entries. It counts people now.
+- **A seat waiting for something to happen could sit through its own turn.**
+  Something arriving in the gap between it reading and it starting to wait woke
+  nobody, and it then waited out the whole timeout holding a turn it had already
+  been given. It re-checks on a short beat, so the worst case is a fraction of a
+  second rather than half a minute.
+
 ### A seat can join on an invite
 
 - A seat had two ways in: an account that already existed, and a token the DM

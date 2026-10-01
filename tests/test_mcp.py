@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import threading
+import time
 from dataclasses import replace
 
 import pytest
@@ -491,7 +493,16 @@ def test_a_seat_can_make_its_own_death_save(qapp, hosted, repos):
         server.run_turn("next")   # on to the goblin
         server.run_turn("next")   # and round to Elara, who is dying
         server.publish_encounter()
-        await asyncio.sleep(0.4)
+        # Waited for rather than slept past. A fixed pause is long enough until
+        # the machine is busy, and then it is a test that fails once a fortnight
+        # and teaches you to run it again.
+        async with asyncio.timeout(10):
+            while not any(
+                c.get("down") for c in (tools.session.table.encounter or {}).get(
+                    "combatants"
+                ) or []
+            ):
+                await asyncio.sleep(0.05)
         seen = tools.the_fight()
         said = await tools.roll_my_death_save()
         await asyncio.sleep(0.4)
@@ -644,3 +655,197 @@ def test_a_whole_invite_carries_its_own_code(qapp, hosted, repos):
     address, carried = enrol.unwrap(whole)
     assert address == f"ws://127.0.0.1:{server.port}"
     assert enrol.clean_code(carried) == enrol.clean_code(code)
+
+
+# ------------------------------------------------ one player, however many ways in
+
+
+def test_one_login_from_two_places_is_one_person_at_the_table(qapp, hosted, repos):
+    """Reported from a real table: "I had mike joining three times."
+
+    A login may hold several connections at once and that is ordinary -- the app
+    and an MCP seat, or a client that has not noticed it was replaced. The roster
+    was one entry per socket, so somebody who joined from two places was two
+    people at the table. That is the list a DM reads to see who has arrived.
+    """
+    server, _campaign, _elara, _villain = hosted
+
+    async def go():
+        first = await _seat(server, "marco", "goblin-teeth")
+        second = await _seat(server, "marco", "goblin-teeth")
+        await asyncio.sleep(0.4)
+        return first, second, server.members
+
+    _first, _second, members = _spin(qapp, go())
+    marcos = [m for m in members if m.name == "Marco"]
+    assert len(marcos) == 1, f"Marco appears {len(marcos)} times: {members}"
+
+
+def test_two_different_logins_are_still_two_people(qapp, hosted, repos):
+    """The other half. Collapsing on the account must not collapse the table."""
+    server, campaign, _elara, _villain = hosted
+    other = repos.entities.create(
+        Entity(id=None, campaign_id=campaign.id, kind=KIND_PC, name="Sable")
+    )
+    account = repos.accounts.create(
+        campaign.id, "ada", "arrows-please", display_name="Ada",
+        character_entity_id=other.id,
+    )
+    repos.entities.set_owner(other.id, account.id)
+
+    async def go():
+        await _seat(server, "marco", "goblin-teeth")
+        await _seat(server, "ada", "arrows-please")
+        await asyncio.sleep(0.4)
+        return server.members
+
+    members = _spin(qapp, go())
+    names = sorted(m.name for m in members)
+    assert names == ["Ada", "Marco"], names
+
+
+# ----------------------------------------------- does the waiting actually work
+#
+# The tests above run the session and the tools on one loop. The real program
+# does not: MCPServer.run owns the main thread's loop and the socket lives on
+# another, in another thread. So the single-loop tests exercise the branch of
+# `on_my_loop` that is a plain await, and say nothing about the crossing -- which
+# is the branch that carries every write and every wait in production.
+
+
+def test_waiting_wakes_when_the_session_is_on_another_thread(qapp, hosted, repos):
+    """The shape the real program has, which no other test here exercises.
+
+    `on_my_loop` marshals onto the loop that owns the socket. On one loop it is
+    a plain await, so a single-loop test cannot tell a working bridge from a
+    missing one.
+    """
+    server, campaign, elara, _villain = hosted
+
+    ready = threading.Event()
+    box: dict = {}
+
+    def run_session() -> None:
+        async def go() -> None:
+            session = AgentSession(
+                f"ws://127.0.0.1:{server.port}", "marco", "goblin-teeth", _ignore
+            )
+            box["session"] = session
+            task = asyncio.create_task(session.run())
+            while session.table.me is None:
+                await asyncio.sleep(0.02)
+            ready.set()
+            with contextlib.suppress(Exception):
+                await task
+
+        asyncio.run(go())
+
+    thread = threading.Thread(target=run_session, daemon=True)
+    thread.start()
+    # Pumped from here, because the host is a Qt server: it cannot accept the
+    # connection unless somebody is turning its loop, and the session is on a
+    # thread of its own rather than inside `_spin`.
+    deadline = time.monotonic() + 15
+    while not ready.is_set() and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.02)
+    assert ready.is_set(), "the session never logged in"
+    tools = CanonKeeperTools(box["session"])
+
+    # Drain, then make something happen and wait for it -- from this thread,
+    # on a different loop from the socket's.
+    tools.read_pending()
+
+    async def go():
+        async def poke():
+            await asyncio.sleep(0.3)
+            server._broadcast_system("Something happened across the thread.")
+        asyncio.get_running_loop().run_in_executor(None, lambda: None)
+        waiter = asyncio.create_task(tools.wait_for_update(8.0))
+        await poke()
+        return await waiter
+
+    news = _spin(qapp, go())
+    assert news.get("said"), f"nothing came back across the loops: {news}"
+    assert any("across the thread" in line["text"] for line in news["said"])
+    assert news["waited"] < 8.0, "it waited out the whole timeout"
+
+
+# There was a test here for the lost-wake race -- a line remembered with no stir
+# behind it, checking that waiting noticed it promptly. It passed with the race
+# *and* with the fix, so it proved nothing: a live session is chatty enough that
+# the next frame from the host arrives within milliseconds and wakes the waiter
+# anyway. The fix below is still worth having (a wake that lands between reading
+# and arming is genuinely lost, and the re-check floor bounds the cost at 0.2s),
+# but it is not guarded by anything here, and a green test that cannot fail is
+# worse than an honest gap.
+
+
+def test_waiting_gives_up_rather_than_hanging(qapp, hosted, repos):
+    """A tool that never returns looks exactly like one that has crashed."""
+    server, _campaign, _elara, _villain = hosted
+
+    async def go():
+        tools = await _seat(server, "marco", "goblin-teeth")
+        tools.read_pending()
+        return await tools.wait_for_update(1.0)
+
+    news = _spin(qapp, go())
+    assert news["said"] == []
+    assert 0.5 <= news["waited"] <= 3.0, f"waited {news['waited']}s for a 1s wait"
+
+
+def test_saying_something_works_from_the_other_thread(qapp, hosted, repos):
+    """The arrangement the real program has, for the tool people use most.
+
+    `say` goes through `on_my_loop`, which on a single loop is a plain await --
+    so every other test of it passes whether the bridge works or not. This one
+    puts the session on its own loop in its own thread, which is what
+    `MCPServer.run` does, and calls the tool from the other side.
+    """
+    server, _campaign, _elara, _villain = hosted
+    ready = threading.Event()
+    box: dict = {}
+
+    def run_session() -> None:
+        async def go() -> None:
+            session = AgentSession(
+                f"ws://127.0.0.1:{server.port}", "marco", "goblin-teeth", _ignore
+            )
+            box["session"] = session
+            task = asyncio.create_task(session.run())
+            while session.table.me is None:
+                await asyncio.sleep(0.02)
+            ready.set()
+            with contextlib.suppress(Exception):
+                await task
+
+        asyncio.run(go())
+
+    threading.Thread(target=run_session, daemon=True).start()
+    deadline = time.monotonic() + 15
+    while not ready.is_set() and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.02)
+    assert ready.is_set(), "the session never logged in"
+
+    tools = CanonKeeperTools(box["session"])
+
+    async def go():
+        return await tools.say("I check the door for traps.")
+
+    said = _spin(qapp, go())
+    assert "Said:" in said
+
+    # It reached the *host*, not just the tool. Pumped, because the host is Qt.
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        qapp.processEvents()
+        if any(
+            "traps" in (line.get("text") or "")
+            for line in server.history(limit=50, for_dm=True)
+        ):
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError("the line never reached the host")

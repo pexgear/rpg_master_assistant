@@ -225,6 +225,18 @@ class CanonKeeperTools:
         entity = self.session.table.entities.get(acting.get("entity"))
         return (entity or {}).get("name", "") or acting.get("stand_in_name", "")
 
+    def _anything_unread(self) -> bool:
+        """Whether a read would return anything. Cheap, and no side effects.
+
+        Deliberately does not move the watermark: it is asked in a loop while
+        waiting, and a check that consumed what it found would hide it from the
+        read that follows.
+        """
+        return (
+            self.session.table.said_so_far > self._read_up_to
+            or bool(self.session.offered)
+        )
+
     async def wait_for_update(self, seconds: float = 30.0) -> dict[str, Any]:
         """Wait until something happens, then say what. Returns early if it has.
 
@@ -245,13 +257,27 @@ class CanonKeeperTools:
             return {"error": "Not connected.", "waited": 0.0}
 
         started = time.monotonic()
+        deadline = started + waited
 
         async def listen() -> None:
             event = self.session.something_happened
             if event is None:
                 return
-            with contextlib.suppress(asyncio.TimeoutError):
-                await asyncio.wait_for(event.wait(), waited)
+            # Re-checked on a short beat rather than waiting once for a single
+            # wake. `_stir` sets the event and clears it again, so a wake that
+            # lands between reading and arming is *lost* -- and waiting once for
+            # the next one would hold an unread turn for the whole timeout,
+            # which is the exact failure this tool exists to prevent. The beat
+            # is the floor on noticing; the event is what makes it usually
+            # instant rather than a poll.
+            while True:
+                if self._anything_unread():
+                    return
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(event.wait(), min(0.2, left))
 
         await self.session.on_my_loop(listen)
         fresh = self.read_pending()
