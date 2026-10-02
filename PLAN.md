@@ -30,18 +30,33 @@ no key and no internet.
 
 ## Where it stands
 
-**0.6.1 is released** and published, with CI green across Windows, macOS and
+**0.6.4 is released** and published, with CI green across Windows, macOS and
 Linux × Python 3.11 and 3.12.
+
+Since 0.6.1, in the order it would matter to somebody picking this up:
+
+- **0.6.2** stood the map up in 3D, and made a turn something you line up before
+  it happens: picking a wedge stages rather than fires, the bar reads the turn
+  back in words, Enter commits it. A turn for a player's character is *put to
+  them* instead. Movement can split around the action, Dash and Extra Attack
+  exist, and keyboard shortcuts belong to the panel that has the focus.
+- **0.6.3** made a seat playable by something other than a person: an agent
+  holding a player's login can run a fight end to end through the MCP, and hears
+  what the host announces, which it could not before.
+- **0.6.4** let that seat join on an invite rather than needing an account made
+  somewhere else first, and started taking the host out of the app -- see
+  *What to do next*, item 2.
+
+**Still nobody has played any of it.** 0.6.1 was the largest change to combat the
+project had and 0.6.2 is larger; all of it is verified by tests and none of it by
+a person running a fight.
 
 Working and used at a table: the plugin shell with docking and named layouts;
 Characters and Cities; one-shot templates; LAN sessions with per-character
 invites, shared chat and host-rolled dice; local speech-to-text; and combat —
 an initiative order and a shared grid, with turns taken on the map.
 
-**Nobody has played 0.6.1.** It is the largest change to combat the project has
-had, and every bit of it is verified by tests and none of it by a person
-running a fight. That is the single most important thing to know before
-starting anything new.
+That is the single most important thing to know before starting anything new.
 
 What 0.6.1 changed, in the order it would bite:
 
@@ -66,15 +81,38 @@ combat rewrite is unexercised by a human, and the bugs it has are the kind
 only playing finds — a turn that feels wrong, a wheel that opens on the wrong
 creature, a walk that looks stupid.
 
-**2. The turn is still one move and one attack.** The budget allows splitting
-movement around the action and the map now permits it, but the *proposal* path
-— what autopilot formalises and a player accepts — still carries one move and
-one attack in that order. Dash, Dodge, Disengage, Hide, Help and Ready do not
-exist, and neither does Extra Attack.
+**2. The host is half out of the app, and that is the one thing in progress.**
+The goal is a standalone server with no desktop toolkit in it, a DM who can log
+in over MCP, and a master who can run a fight from a terminal. Two steps of four
+are done and the suite is green at each:
 
-**3. Spells are absent.** Attacks are a weapon, a d20 and reach. This is the
-largest single hole between the app and the game, and the one most likely to
-decide whether it is usable for a real campaign past level three.
+- `canon_keeper_core` now holds the database, the repositories, the rules and
+  the SRD. None of it ever imported Qt; it was only packaged inside the app,
+  which made running a session without a screen cost 660 MB of Qt anyway.
+- The host no longer needs Qt to *signal* or to *wait*: hooks replaced signals,
+  and an injected clock replaced its timers.
+
+What is left is the transport, and the design is decided rather than open.
+`QWebSocketServer` becomes a listener that calls the host, and `QWebSocket`
+becomes a connection whose `send` is **synchronous and queued** — a writer task
+drains it. That last part is the whole trick: the host sends from deep inside
+synchronous rule methods, so making the send await would turn three thousand
+lines inside out. Then the host moves into the core, `SessionServer` stays as a
+thin Qt-flavoured wrapper so the app and the suite do not change, and the app
+runs it on a thread. That thread is a real cost: `_referee()` stops being a
+direct call, because sqlite and the session table would otherwise be touched
+from two threads.
+
+**3. Dodge, Disengage, Hide, Help and Ready do not exist**, and the *proposal*
+path still carries one move and one attack in that order — the DM's own map
+stages a full sequence, but `offer_turn` refuses one it cannot express rather
+than sending a player a shortened version of it.
+
+**Spells are deliberately out of scope**, decided rather than missing: attacks
+stay a weapon, a d20 and reach, and a spell is a ruling the DM makes. Terrain is
+decided the same way — line of sight only, if it is built at all, and it is the
+most expensive thing on this list because what a player is *sent* is already an
+allowlist, so real line of sight means the host deciding visibility per viewer.
 
 **4. Nothing measures whether the agent plays well.** Every layer around it is
 tested; whether it writes a good scene, or lays a fight out sensibly, is not

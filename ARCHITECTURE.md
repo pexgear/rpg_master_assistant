@@ -1105,5 +1105,11 @@ Written down so they are choices rather than surprises.
 - **MCP sends campaign context to whatever model the client runs.** Fine for a
   player's own seat; pointing it at a DM login sends your secrets to whoever
   runs that model.
+- **The host still needs Qt, for its sockets and nothing else.** The rules, the
+  clock and the hooks are free of it and `canon_keeper_core` imports with PySide6
+  unavailable, but `QWebSocketServer` and `QWebSocket` remain -- so
+  `canonkeeper-server` still installs a desktop toolkit in order to run a session
+  with no screen. The design for the rest is settled rather than open; see
+  PLAN.md, *What to do next*.
 - **Sub-packages version in lockstep** with the app because they ship in one
   wheel. Publishing them separately means deciding whether that stays true.

@@ -5,6 +5,21 @@ What changed, from the point of view of someone running a game. See
 
 ## Unreleased
 
+## 0.6.4
+
+A seat can let itself in, and the game starts moving out of the window.
+
+### Under the floor
+
+Nothing here changes what you do, and it is the reason the next release can.
+The database, the rules and the SRD content now live in a package of their own
+rather than inside the desktop app -- none of it ever needed Qt, so running a
+session without a screen was paying for a toolkit it never used. The host no
+longer needs Qt to announce things or to wait for them either. What remains is
+the sockets, and after that `canonkeeper-server` becomes a real standalone
+program: a session you can run on a spare box, with a DM who can log in over
+MCP or from a terminal.
+
 ### Fixes
 
 - **Somebody who joined from two places was two people at the table.** The
